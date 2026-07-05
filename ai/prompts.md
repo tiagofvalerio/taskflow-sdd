@@ -494,3 +494,54 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    dirigida por checklist. Racional completo, incluindo a confirmação de
    que a lição da entrada 7 generaliza (ausência exige checklist
    deliberado, não releitura), está em `ai/revisoes.md` entrada 8.
+
+---
+
+## 10. Consolidação das decisões de design em `docs/decisoes.md`
+
+1. **Contexto** — Fase de especificação encerrada (spec congelada, entrada 9
+   acima). Pedido de consolidar, num único documento em português, o
+   racional honesto por trás de todas as decisões de design já tomadas e
+   defendidas em `spec/openapi.yaml`, `CLAUDE.md` e `ai/revisoes.md` — não
+   uma nova rodada de decisão, e sim a redação final do que já tinha sido
+   decidido e disperso por várias fontes.
+
+2. **Prompt (resumo)** — Lista fechada de 9 itens a cobrir, um por seção,
+   com pedido explícito de tom honesto (não marketing) e nomeação de
+   alternativa rejeitada onde houve uma: (1) racional spec-first e
+   prevenção de drift via testes de contrato + validação de schema em CI
+   pras duas stacks + diff da spec gerada por `smallrye` contra a manual;
+   (2) arquitetura assimétrica deliberada (hexagonal Quarkus vs. Rails-way
+   idiomático) e onde cada uma das 6 regras de negócio vive em cada stack;
+   (3) modelo de erros RFC 7807, taxonomia de 400 por contexto, 400 vs 422
+   incluindo `completedAt` manual; (4) modelo de precedência completo
+   (400→404→422, sub-ordens internas); (5) regra de negócio 6 (furo do
+   invariante retroativo) e semântica de no-op por campo; (6) convenções
+   transversais (ordenação, UTC/`Z`, trailing slash, query param
+   desconhecido, convenção de nomes); (7) Postgres via Testcontainers como
+   desvio justificado do SQLite/in-memory do enunciado; (8) pirâmide de
+   testes completa; (9) processo de revisão da spec (6 rodadas, contagem de
+   achados 19→16→8→6→4→1→2, critério de parada, lição metodológica).
+   Fechado com "pergunte antes de assumir algo não decidido".
+
+3. **O que a IA produziu** — Leu `spec/openapi.yaml` (completo),
+   `ai/revisoes.md` (completo, 8 entradas), `ai/prompts.md` e `ai/skills.md`
+   antes de escrever, pra basear cada seção em decisão já registrada, não em
+   invenção. Criou `docs/decisoes.md` do zero: 9 seções, uma por item do
+   pedido, cada uma com a decisão, o racional, e — onde aplicável —
+   alternativa rejeitada nomeada explicitamente (code-first em vez de
+   spec-first no item 1; hexagonal simétrico nas duas stacks no item 2).
+   Não pediu esclarecimento adicional ao usuário porque os 9 itens do
+   próprio prompt já traziam o conteúdo específico a documentar (inclusive
+   detalhes não escritos em nenhum arquivo do repo ainda, como o diff via
+   `smallrye` e o uso de Schemathesis/`mutant` em CI) — tratados como
+   decisão relatada pelo usuário no próprio prompt, não como suposição da
+   IA. Confirmou via `ls`/`find` que `quarkus-impl/`, `rails-impl/` e
+   `.github/` ainda estão vazios, pra não inventar detalhe de implementação
+   inexistente nas seções 2, 7 e 8.
+
+4. **Resultado** — Aceito como veio, sem edição. Ao rodar `/revisar` em
+   seguida, não havia diff nenhum no arquivo (nunca editado após a escrita)
+   e o usuário confirmou explicitamente que a revisão dele foi só de
+   leitura ("ok to begin development") — sem correção a registrar, por isso
+   nenhuma entrada nova foi criada em `ai/revisoes.md` para esta tarefa.

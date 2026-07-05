@@ -749,3 +749,62 @@ Do not change anything else. Summarize.
 **2026-07-04 23:46**
 
 /log-ai varredura de ausências e congelamento da spec
+
+---
+**2026-07-04 23:51**
+
+Create docs/decisoes.md in Brazilian Portuguese documenting, with honest
+trade-off discussion (not marketing), the design decisions of this project.
+Base yourself on spec/openapi.yaml (frozen), CLAUDE.md, and ai/revisoes.md —
+the decisions below were already made and defended there; this document
+consolidates them. Ask me before assuming anything not decided.
+
+1. Por que spec-first e como prevenimos drift: testes de contrato + validação
+   de schema em CI validando AMBAS as implementações contra o mesmo
+   openapi.yaml; diff da spec gerada (smallrye) contra a spec manual.
+2. Arquitetura assimétrica deliberada: hexagonal no Quarkus (fit natural) vs
+   Rails-way idiomático com modelos AR ricos no Rails. Por que NÃO forçamos
+   hexagonal no Rails. Onde cada uma das 6 regras de negócio vive em cada stack.
+3. Modelo de erros: RFC 7807; taxonomia de 400 por contexto (path/query/body,
+   cada um com type URI próprio); 400 vs 422 (sintático vs invariante de
+   domínio), incluindo completedAt manual = 400 com a justificativa registrada.
+4. Modelo de precedência completo: 400 → 404 → 422; dentro do 400,
+   path → query → body com fail-fast; dentro do 422, precondições de estado
+   (regra 6) antes de regras de transição (regra 5). Por que isso garante que
+   dois stacks respondam identicamente ao mesmo request inválido.
+5. Regra de negócio 6 (descoberta em revisão): tarefas de projeto arquivado não
+   mudam status — o furo do invariante retroativo que a revisão adversarial
+   encontrou. Semântica de no-op por campo; desarquivamento permitido.
+6. Convenções transversais que evitam divergência observável entre stacks:
+   ordenação determinística das listagens (createdAt ASC, id ASC), datetimes
+   UTC com sufixo Z, URLs não-canônicas fora do contrato, query params
+   desconhecidos ignorados, nomes de componentes em inglês / paths em português.
+7. Persistência: PostgreSQL via Testcontainers nos testes de integração —
+   desvio justificado do SQLite/in-memory do enunciado.
+8. Pirâmide de testes: unit (domínio Java / model specs Rails) → mutation (PIT
+   no domínio; mutant em app/models se viável) → integração de adapters
+   (Testcontainers) → contrato (RestAssured+validator / committee) →
+   Schemathesis em CI contra as duas APIs.
+9. Processo de revisão da spec: 6 rodadas adversariais + varredura dirigida de
+   ausências, com contagem de findings 19→16→8→6→4→1→2, critério de parada
+   explícito, e a lição metodológica: revisão de texto encontra o que está
+   escrito errado; propriedades transversais ausentes (ordenação, timezone,
+   trailing slash) exigem checklist dirigido próprio.
+
+Keep it one section per item, concise, factual tone. Where a decision had a
+rejected alternative, name the alternative and why it lost.
+
+---
+**2026-07-05 11:22**
+
+/revisar revisão do decisoes.md gerado: [o que você ajustou — tom, claims imprecisos, seções reorganizadas]
+
+---
+**2026-07-05 11:33**
+
+/log-ai consolidação das decisões de design em docs/decisoes.md
+
+---
+**2026-07-05 11:34**
+
+git add .
