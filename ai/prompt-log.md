@@ -3,3 +3,749 @@
 **2026-07-04 14:12**
 
 testing the prompt hook
+
+---
+**2026-07-04 14:31**
+
+Read CLAUDE.md and the challenge requirements I'll describe. Create spec/openapi.yaml
+(OpenAPI 3.0) for the TaskFlow Projects & Tasks API. Endpoints:
+POST /projetos, GET /projetos (filter: status), GET /projetos/{id},
+PATCH /projetos/{id}, POST /projetos/{id}/tarefas,
+GET /projetos/{id}/tarefas (filters: status, priority),
+PATCH /tarefas/{id}, DELETE /tarefas/{id}.
+
+Entities: Projeto (id uuid readOnly, name required max 100, description optional,
+status enum active|archived default active, createdAt readOnly) and Tarefa
+(id uuid readOnly, title required max 200, description optional, status enum
+pending|in_progress|done default pending, priority enum low|medium|high REQUIRED,
+createdAt readOnly, completedAt readOnly, projectId readOnly).
+
+Error model: RFC 7807. Define reusable ProblemDetails and ValidationProblemDetails
+schemas. Status codes covered: 200, 201 (+Location header), 204, 400, 404, 422.
+
+Define one distinct ProblemDetails `type` URI per business rule, each with a
+response example:
+1. archive blocked by in_progress task
+2. delete non-pending task
+3. task status regression (forward-only pending→in_progress→done)
+4. create task in archived project
+5. completedAt submitted manually — propose 400 vs 422 with one-line rationale
+   as a YAML comment; I will decide.
+
+PATCH = partial update; document which fields are patchable per resource and that
+unknown/readOnly fields in the body are rejected with 400. State explicitly (as
+spec description) that there is no pagination, as a deliberate scope decision.
+Do NOT write any implementation code.
+
+---
+**2026-07-04 15:09**
+
+Two decisions on spec/openapi.yaml:
+
+1. completedAt submitted manually = HTTP 400 (not 422). Rationale: it is not a
+   client-writable field, so its presence makes the request malformed at the
+   contract level — same treatment as any unknown/readOnly field. Remove the
+   YAML comment with the two options and document this decision in the spec
+   (description of the 400 response on POST /projetos/{id}/tarefas and
+   PATCH /tarefas/{id}).
+
+2. Split request and response schemas — the current entity-shaped schemas leak
+   persistence structure into the contract. Create:
+   - CreateProjectRequest (name, description), UpdateProjectRequest (name,
+     description, status), Project (full response shape)
+   - CreateTaskRequest (title, description, priority), UpdateTaskRequest
+     (title, description, status, priority), Task (full response shape,
+     including completedAt and projectId)
+   Wire every endpoint to the correct schema. Request schemas must set
+   additionalProperties: false so unknown fields (including completedAt) are
+   rejectable as 400. Update all examples accordingly.
+
+Do not change anything else. Show me a summary of what changed.
+
+---
+**2026-07-04 15:14**
+
+/revisar schemas da v1 do openapi.yaml modelados como entidades de banco (um schema único para request e response, expondo campos gerados pelo sistema como se fossem de entrada). Correção: separação em CreateXRequest/UpdateXRequest/X-response com additionalProperties: false nos requests. Decisão associada: completedAt manual = 400, pois campo não-gravável torna o request malformado no nível do contrato.
+
+---
+**2026-07-04 15:15**
+
+/log-ai refinamento do contrato: separação request/response schemas e decisão completedAt=400
+
+---
+**2026-07-04 15:16**
+
+Use the spec-reviewer agent to review spec/openapi.yaml again. Findings grouped by severity.
+
+---
+**2026-07-04 15:20**
+
+<task-notification>
+<task-id>a5e01bf9ae71b2190</task-id>
+<tool-use-id>toolu_01CQ4NMbu9PYsasN7KDEPkZQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/f5eb6a40-0e77-40e0-a35d-560c990fbcd4/tasks/a5e01bf9ae71b2190.output</output-file>
+<status>completed</status>
+<summary>Agent "Review openapi.yaml spec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Adversarial Review: `spec/openapi.yaml`
+
+## Critical / Blocker
+
+1. **Missing `GET /tarefas/{id}`** (no such path exists; only `patch`/`delete` under `/tarefas/{id}`, lines 228–301). `POST /projetos/{id}/tarefas` returns a `Location: /tarefas/{id}` header (line 160–164), implying that URI is a retrievable resource, but no operation lets a client fetch a single task directly. Two implementers will diverge on whether this endpoint is "obviously implied" or "out of scope."
+
+2. **No 400 response for malformed path-param UUID on `GET /projetos/{id}`** (lines 92–104, only `200`/`404` defined) **and on `DELETE /tarefas/{id}`** (lines 283–301, only `204`/`404`/`422` defined). Every other operation with a body defines `400`, but these two body-less operations don't, and the `id` path parameter (lines 305–321) only carries `format: uuid` (unenforced hint, not a pattern). One stack may raise a framework-level 400/malformed-request for a non-UUID string, another may let it fall through to a lookup and 500 (Postgres cast error) or silently 404. This is exactly the kind of divergence the spec must close.
+
+3. **Forward-only status rule doesn't specify whether intermediate states can be skipped.** Lines 239–241 and the `TaskStatusRegression` example (566–573) only define what counts as *regression*; they never state whether `pending → done` (skipping `in_progress`) is a valid "forward" move or must be rejected. Also unspecified: does a same-state PATCH (e.g. `done → done`) count as a forbidden non-forward transition, or a harmless no-op? Both are plausible readings of "forward-only," and Quarkus/Rails could legitimately implement opposite behavior from the same text.
+
+4. **Rule #1 ("archived project has no in_progress task") is only checked at archive time, not maintained afterward.** Nothing in the spec prevents `PATCH /tarefas/{id}` from moving a `pending` task (which is legally allowed to exist in an archived project, since archiving is only blocked by `in_progress` tasks — line 113–114) into `in_progress` after its project is archived. This can produce an archived project with an `in_progress` task, contradicting the intent of invariant #1. The spec never states whether task status transitions must also check the parent project's archived state.
+
+5. **Shared `NotFound` response example is factually wrong when reused for task-not-found cases.** `components/responses/NotFound` (lines 333–344) has a single hardcoded example: `"No projeto found with id ..."` / `instance: .../projetos/{id}`. This exact same `$ref` is reused for `PATCH /tarefas/{id}` 404 (line 271–272) and `DELETE /tarefas/{id}` 404 (line 291–292), where the correct message should reference a missing *tarefa*, not *projeto*. Any tooling/mocks/tests generated from these examples will produce incorrect documentation for task-not-found responses.
+
+## Major
+
+6. **Rule numbering mismatch between spec examples and `CLAUDE.md`.** The `TaskCreateInArchivedProject` example is labeled `"Business rule 4 — create task in archived project"` (line 576), but per `CLAUDE.md` this is invariant **#5** ("No new tasks in archived projects"); invariant #4 is the `completedAt` rule (documented as 400, not 422). Cross-referencing the two documents during implementation/testing will be confusing and inconsistent.
+
+7. **No examples exist for any `400`/`ValidationProblemDetails` response**, despite this being the exact scenario the task brief calls out (missing `name`, `title` &gt; 200 chars, invalid enum, and — most importantly given the recent revision — submitting `completedAt`). `components/responses/BadRequest` (323–331), and the inline 400s on `POST /projetos/{id}/tarefas` (169–180) and `PATCH /tarefas/{id}` (259–270), all reference `ValidationProblemDetails` but never show a concrete `errors[]` payload. The `errors[].field` naming convention (bare property name vs. JSON-pointer/dotted path, e.g. `"priority"` vs `"body.priority"`) is completely unspecified — a near-certain source of divergence between a Quarkus Bean-Validation implementation and a Rails/committee-gem implementation.
+
+8. **No `DELETE /projetos/{id}` endpoint, and no stated reason.** Unlike the pagination decision, which is explicitly called out as "a deliberate scope decision, not an oversight" (info.description, lines 9–14), the absence of project deletion is never addressed. A reviewer cannot tell if this is intentional or a gap.
+
+9. **PATCH atomicity is unstated.** When a single `PATCH /projetos/{id}` or `PATCH /tarefas/{id}` body contains multiple fields (e.g. `name` + `status: archived`, or `priority` + `status`) and the business-rule check on `status` fails, the spec never states whether the whole request is rejected atomically (no side effects) or whether other fields could theoretically be persisted first. Given "business rules live in the model" per `CLAUDE.md`, this is likely intended to be atomic, but the spec should say so explicitly since it directly affects domain-layer transaction boundaries in both stacks.
+
+10. **Naming inconsistency: Portuguese-prefixed enum schemas vs. English resource/request schemas.** `ProjetoStatus`, `TarefaStatus`, `TarefaPriority` (347–357) mix Portuguese nouns with English suffixes, while the resource and request/response schemas are fully English (`Project`, `Task`, `CreateProjectRequest`, `UpdateTaskRequest`). Combined with Portuguese path segments (`/projetos`, `/tarefas`), this is a deliberate-looking but never-justified naming split that will produce inconsistent generated class/type names across the Quarkus (Java) and Rails codegen/serializers.
+
+11. **`name`/`title` have `maxLength` but no `minLength`.** `CreateProjectRequest.name` (392–395, maxLength 100) and `CreateTaskRequest.title` (467–469, maxLength 200) allow an empty string `""` to satisfy `required`. Since the review brief explicitly lists "missing name" as a 400 case, an empty-but-present name is a loophole that the schema doesn't close — behavior on `""` is unspecified and likely to diverge (one stack may add a Bean Validation `@NotBlank`, the other an ActiveRecord presence validator with different trimming semantics).
+
+## Minor
+
+12. **`BadRequest`/completedAt-400 responses are duplicated inline instead of extended from the shared component.** `POST /projetos/{id}/tarefas` (169–180) and `PATCH /tarefas/{id}` (259–270) redefine the same description/schema as `components/responses/BadRequest` rather than reusing it — a DRY violation that risks the copies drifting out of sync.
+
+13. **`ProblemDetails.type` has `default: about:blank`** (line 511) that is never actually used — every documented response supplies an explicit `type` URI. Harmless but dead/orphaned spec content.
+
+14. **No `minLength`/`maxLength` on `description`** anywhere (Project/Task/Create*/Update* schemas) — unbounded text field, likely intentional but never stated as a deliberate choice the way pagination and PATCH semantics are.
+
+15. **No explicit statement on whether "no-op" status values are permitted** on `PATCH /projetos/{id}` (`active→active`, `archived→archived`) or `PATCH /tarefas/{id}` — related to finding #3 but specifically about idempotent same-value PATCHes.
+
+16. **No `servers:` block and no security scheme** defined anywhere in the document. May be intentionally out of scope, but — unlike the pagination note — this isn't called out as a deliberate decision, so a reviewer can't distinguish "not yet decided" from "no auth by design."
+
+17. **Location header schema uses bare `type: string`** (52–54, 161–163) rather than `format: uri`/`format: uri-reference`, inconsistent with `ProblemDetails.type`/`instance` which do declare `format: uri` (508–509, 522–523).
+
+18. **Mixed-language human-readable text**: `NotFound` example detail reads "No projeto found with id ..." (line 343) — an English sentence with an untranslated Portuguese noun. Minor localization/consistency nit but visible to any API consumer.
+
+19. **Query-filter invalid-value behavior only covered by the generic `BadRequest` ref** with zero example (GET `/projetos` line 85–86, GET `/projetos/{id}/tarefas` line 223–224) — matches the enum type but gives no concrete guidance on error shape for an invalid `status`/`priority` query value.
+
+## Summary of files reviewed
+- `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` (entire file, 583 lines)
+- `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md` (for cross-checking the 5 numbered invariants against spec examples)</result>
+<usage><subagent_tokens>14092</subagent_tokens><tool_uses>1</tool_uses><duration_ms>197457</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-04 15:27**
+
+Apply the spec-review resolutions to spec/openapi.yaml:
+
+FIXES (as flagged): #2 add 400 malformed-UUID to every {id} endpoint; #5
+per-resource NotFound examples; #7 ValidationProblemDetails examples with
+errors[] using bare field names ("name", "title"); #11 minLength: 1 on
+name/title; #12 consolidate inline 400s into the BadRequest component; #13
+remove unused about:blank default; #17 Location header format: uri; #19
+example for invalid filter values (400).
+
+DECISIONS:
+#1: add GET /tarefas/{id} (200 + 404 + 400) so the create Location is fetchable.
+#3/#15: strict sequential transitions — only pending→in_progress and
+in_progress→done are valid; skip-ahead is 422 (transition rule type URI).
+Same-state PATCH on any resource is a 200 no-op. Document in the relevant
+PATCH descriptions.
+#4: NEW business rule — status transitions on tasks of an archived project
+return 422 with its own ProblemDetails type URI + example. Title/description
+edits remain allowed. Add to the business-rules overview in the spec.
+#6: renumber business rules to the challenge order (1 archive, 2 delete,
+3 completedAt auto, 4 archived-project creation, 5 transitions), with the new
+#4-derived rule appended as rule 6.
+#8: do NOT add DELETE /projetos; document its absence as a deliberate scope
+decision in the top-level description, alongside pagination.
+#9: document PATCH as atomic — any rule violation rejects the entire request.
+#10/#18: convention — English schema/component names, Portuguese paths,
+Portuguese detail messages. Rename ProjetoStatus→ProjectStatus,
+TarefaStatus→TaskStatus, fix mixed-language examples, state the convention in
+the top-level description.
+#14: maxLength: 2000 on both description fields.
+#16: servers: block (http://localhost:8080 and http://localhost:3000, with a
+comment that production URLs are added post-deploy); one line stating
+authentication is deliberately out of scope.
+
+Also update CLAUDE.md's invariants list to the same numbering and add rule 6.
+Do not change anything else. Summarize every change made.
+
+---
+**2026-07-04 16:32**
+
+continue
+
+---
+**2026-07-04 16:33**
+
+/revisar rodada 1 do spec-reviewer (19 findings): destaque para o furo do invariante retroativo — tarefas pending de projeto arquivado podiam transicionar para in_progress, violando a regra 1 após o fato; virou a regra de negócio 6. Decisões: transições estritamente sequenciais (skip = 422), PATCH atômico, sem DELETE /projetos (escopo deliberado), convenção EN-schemas/PT-paths. Também corrigi a numeração de regras do meu próprio CLAUDE.md, que divergia do enunciado.
+
+---
+**2026-07-04 16:34**
+
+/log-ai revisão adversarial v1 do openapi.yaml e resoluções (19 findings, 1 regra de negócio nova)
+
+---
+**2026-07-04 16:34**
+
+Use the spec-reviewer agent to review spec/openapi.yaml again. Findings grouped by severity.
+
+---
+**2026-07-04 16:40**
+
+<task-notification>
+<task-id>af6d50f3e9bbd0a0c</task-id>
+<tool-use-id>toolu_011LhybNhEpqg7vKEgoWcHPo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/f5eb6a40-0e77-40e0-a35d-560c990fbcd4/tasks/af6d50f3e9bbd0a0c.output</output-file>
+<status>completed</status>
+<summary>Agent "Second review pass openapi.yaml" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Adversarial Review — `spec/openapi.yaml` (second pass)
+
+Re-derived fresh against the current file content and cross-checked line-by-line against `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md`'s 6 renumbered invariants. Confirmed good first: the six business rules are numbered identically in `info.description` (lines 46–57) and in CLAUDE.md; all five `components.examples` are referenced exactly once and every schema is referenced somewhere (no orphans); rule 6 is correctly wired to `PATCH /tarefas/{id}` → `422` → `TaskStatusChangeBlockedArchivedProject` (lines 297–299, 330–331, 718–725), distinct from rule 5's example on the same response; and the `completedAt`⇒`400` decision (rule 3) has no leftover `422` reference anywhere in the file.
+
+## Critical / Blocker
+
+1. **Same-state-PATCH-is-no-op vs. rule 6 conflict, unresolved.** Lines 29–32 say resubmitting a resource's current `status` is always a no-op (`200`). Business rule 6 (lines 56–57, 297–299) says a task in an archived project "cannot change status at all." The spec never states which wins when a task in an archived project receives `status: &lt;its current value&gt;`. Two implementers can legitimately return `200` or `422` for the identical request.
+2. **Rule 6 silently omits `priority`.** Rule 6's text and the `PATCH /tarefas/{id}` description (lines 56–57, 297–299) only whitelist `title`/`description` as still-editable when the project is archived; `priority` is never mentioned even though `UpdateTaskRequest` (lines 610–636) lists it as patchable. Whether `priority` is locked (like `status`) or free (like `title`/`description`) is undefined — a direct implementation-divergence risk.
+3. **No stated validation precedence for overlapping error classes.** Nowhere does the spec say whether `400` (schema) is checked before `404` (existence) or before `422` (business rule) when a single request could trigger more than one (e.g., a PATCH body with an invalid field on a project id that also doesn't exist, or a body that's both schema-invalid and would violate a business rule if valid). This affects every mutating endpoint (`/projetos/{id}` PATCH, `/projetos/{id}/tarefas` POST, `/tarefas/{id}` PATCH/DELETE).
+4. **Un-archiving (`archived → active`) is undefined.** `ProjectStatus` enum (line 470–472) permits it structurally, but none of the 6 business rules nor the `PATCH /projetos/{id}` description (lines 155–160) say whether this transition is allowed, forbidden, or itself a business rule. This is a real gap distinct from rule 1 (which only guards the `→ archived` direction).
+
+## Major
+
+5. **`TarefaPriority` was missed in the English rename pass** — `ProjetoStatus→ProjectStatus` and `TarefaStatus→TaskStatus` were renamed per the stated convention ("Schema/component names are English", line 36), but `TarefaPriority` (lines 250, 478–480, 572, 607, 636) keeps its Portuguese prefix, contradicting the convention and creating a real risk that Quarkus and Rails teams name the equivalent enum differently.
+6. **Example-key naming convention clash.** `components.examples` uses English PascalCase (`ArchiveBlockedByInProgressTask`, `TaskDeleteNotPending`, etc., lines 682–725), but the five examples embedded inline in `components.responses.BadRequest` use Portuguese camelCase (`projetoNomeInvalido`, `tarefaTituloInvalido`, `campoSomenteLeituraOuDesconhecido`, `idInvalido`, `filtroInvalido`, lines 387–441) — same construct (a named ProblemDetails example), two incompatible naming schemes within the same file, one of which contradicts the stated "Schema/component names are English" rule.
+7. **Consolidated `BadRequest` response is over-generalized.** Every operation (lines 103, 129, 147, 175, 217, 261, 281, 318, 342) references the same `BadRequest` component, which always surfaces all 5 examples regardless of relevance — e.g. `GET /projetos` (no body, no path id) still documents `campoSomenteLeituraOuDesconhecido` (a PATCH-only `completedAt` scenario) and `idInvalido` (a path-id scenario impossible on a collection endpoint). This makes generated docs/mocks misleading per-endpoint, and undermines the review requirement that error cases be clearly scoped per operation.
+8. **One `type` URI covers unrelated problem categories.** All 5 `BadRequest` examples (lines 387–441) share `type: https://taskflow.dev/errors/invalid-request-body` and `title: "Corpo da requisição inválido"` (literally "invalid request **body**"), even for `idInvalido` (a path-parameter problem) and `filtroInvalido` (a query-string problem) — neither is a body issue. This both violates RFC 7807's intent that `type` identify the specific problem and is textually wrong for those two cases.
+9. **Missing inline rule pointer on `POST /projetos/{id}/tarefas`.** Every other business-rule-triggering operation has an inline `description` naming its rule (`PATCH /projetos/{id}` → "#1", `PATCH /tarefas/{id}` → "#5"/"#6", `DELETE /tarefas/{id}` → "#2", lines 158, 295–298, 337) but `POST /projetos/{id}/tarefas` (lines 192–229, rule #4) has no `description` field at all — the 422 response/example is correctly wired, but the documentation style is inconsistent.
+
+## Minor
+
+10. **Terminology drift:** rule 3 is called "invariant #3" (line 618) while every other rule reference in the file says "business rule #N" (lines 158, 295, 298, 337).
+11. **`format: uri` vs. relative-path examples:** the `Location` header schema declares `format: uri` (lines 95–97, 209–211) but both examples are host-relative paths (`/projetos/...`, `/tarefas/...`), which are URI-references, not full URIs — strict validators would flag the examples against their own declared format.
+12. **`instance` values use a fixed `https://taskflow.dev/...` origin** in every example, but the declared `servers:` are only `http://localhost:8080`/`:3000` (lines 63–68) — the examples don't correspond to any real server, which is a documentation-realism nit, not a bug.
+13. **Parameter/response component names remain Portuguese** (`ProjetoId`, `TarefaId`, `ProjetoNotFound`, `TarefaNotFound`) while schema names moved fully to English — the stated convention doesn't say whether "schema/component names" scopes to schemas only or all `components.*`, leaving this a gray area worth an explicit decision note.
+14. **`filtroInvalido`'s only example covers an invalid `status` filter** — there's no equivalent example for an invalid `priority` filter, even though both are typed-enum query params per the review checklist.
+15. **No stated AND/OR semantics** when `status` and `priority` filters are combined on `GET /projetos/{id}/tarefas`.
+16. **`minProperties: 1` on `UpdateProjectRequest`/`UpdateTaskRequest`** (lines 536, 623) enforces rejecting an empty `{}` PATCH body, but no `BadRequest` example documents this specific case.
+
+**Locations referenced:** `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` (all line numbers above refer to this file). Cross-referenced against `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md`.</result>
+<usage><subagent_tokens>44974</subagent_tokens><tool_uses>5</tool_uses><duration_ms>322747</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-04 16:44**
+
+Apply round-2 spec-review resolutions to spec/openapi.yaml:
+
+DECISIONS:
+#1: no-op precedence over rule 6 — resubmitting a task's current status is a
+200 no-op even when its project is archived; a no-op is not a status change.
+State this precedence inside rule 6's text and in PATCH /tarefas/{id}.
+#2: rule 6 reformulated as a blacklist: "status cannot change on a task of an
+archived project; all other patchable fields (title, description, priority)
+remain editable." Update the rule text and the rule-6 example's detail message.
+#3: add a "Validation precedence" paragraph to info.description: 400 (malformed
+request: path param, query param, body) is evaluated first, then 404 (resource
+existence), then 422 (business rules). A request failing an earlier stage never
+reaches a later one.
+#4: un-archiving (archived -> active) is explicitly allowed — add a scope-decision
+bullet: deliberate, no invariant is threatened, tasks become transitionable again.
+
+FIXES:
+#5/#13: naming convention applies to ALL component names — rename TarefaPriority
+->TaskPriority, ProjetoId->ProjectIdParam, TarefaId->TaskIdParam,
+ProjetoNotFound->ProjectNotFound, TarefaNotFound->TaskNotFound; update every
+$ref; restate the convention's scope in info.description.
+#6: example naming — components.examples keys PascalCase, usage-site example
+keys camelCase, consistently; add to the convention.
+#7/#8: split the consolidated BadRequest into three response components, each
+with its own type URI and only-relevant examples:
+- InvalidRequestBody (schema: ValidationProblemDetails, type
+  https://taskflow.dev/errors/invalid-request-body) — body schema violations,
+  incl. completedAt-submitted, empty {} PATCH (minProperties), missing
+  required, oversized/empty strings, invalid enum in body
+- InvalidPathParameter (ProblemDetails, .../errors/invalid-path-parameter) —
+  malformed UUID example
+- InvalidQueryParameter (ProblemDetails, .../errors/invalid-query-parameter) —
+  invalid status filter AND invalid priority filter examples (#14)
+Wire each operation only to the 400 flavors it can produce. Portuguese titles.
+#9: POST /projetos/{id}/tarefas description gets the rule-4 pointer, matching
+other business-rule operations.
+#10: "business rule #N" terminology everywhere ("invariant #3" -> rule 3).
+#11: Location headers: format: uri-reference (relative reference), keep
+relative examples, note it in the header description.
+#12: instance examples become relative request paths; type URIs stay absolute —
+add one line to ProblemDetails.type description: stable identifiers, not
+dereferenceable links.
+#15: document combined status+priority filters as AND semantics on
+GET /projetos/{id}/tarefas.
+#16: covered by the empty-{} example in InvalidRequestBody.
+
+Do not change anything else. Summarize every change.
+
+---
+**2026-07-04 16:49**
+
+/revisar rodada 2 do spec-reviewer (16 findings): destaque para dois conflitos entre minhas próprias decisões da rodada 1 — no-op vs regra 6 (resolvido: no-op prevalece, pois não é mudança de status) e o BadRequest consolidado que sobre-generalizou a correção anterior (dividido em 3 componentes com type URIs distintos por categoria de 400). Decisões novas: precedência de validação 400→404→422, desarquivamento permitido explicitamente, regra 6 como blacklist de status.
+
+---
+**2026-07-04 16:50**
+
+/log-ai rodada 2 de revisão adversarial do openapi.yaml
+
+---
+**2026-07-04 16:50**
+
+Use the spec-reviewer agent to review spec/openapi.yaml again. Findings grouped by severity.
+
+---
+**2026-07-04 16:56**
+
+<task-notification>
+<task-id>a07b9fceac88e1744</task-id>
+<tool-use-id>toolu_01CEk9Px9V9ABBB99WL66K9v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/f5eb6a40-0e77-40e0-a35d-560c990fbcd4/tasks/a07b9fceac88e1744.output</output-file>
+<status>completed</status>
+<summary>Agent "Third review pass openapi.yaml" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I performed a full line-by-line re-derivation of `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` against `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md`, without assuming any prior pass's conclusions. This is not a clean pass — I found genuine, fresh issues, several introduced or exposed by this revision's own changes.
+
+## CRITICAL
+
+1. **`InvalidQueryParameter` shared response is wired to the wrong content for its only usage site.** `components.responses.InvalidQueryParameter` (lines 497-507) is referenced by exactly one operation: `GET /projetos` (line 152-153), whose only query filter is `status` typed as `ProjectStatus` (`active`/`archived`). But the response bundles `invalidStatusFilter`, whose `detail` text (`components.examples.InvalidStatusFilter`, lines 854-861) hardcodes *task*-status values ("deve ser um dos valores: pending, in_progress, done") — the wrong enum for this endpoint — and `invalidPriorityFilter` (lines 863-870), documenting a `priority` filter that `GET /projetos` doesn't have at all. An implementer reading this endpoint's 400 documentation could reasonably (and wrongly) infer `GET /projetos` supports priority filtering. This is exactly the over-scoping the review was asked to check for, and it's a genuine spec defect, not a stylistic nit.
+
+2. **"Same-state PATCH is a no-op" is ambiguous when combined with other field edits in the same request.** The scope-decision bullet (lines 35-40) says resubmitting the current `status` "is accepted and returns `200` unchanged." It never states whether *other* fields submitted alongside the same-state `status` (e.g. `{"status": "active", "name": "New Name"}` on an already-`active` project) are applied. "200 unchanged" reads ambiguously as either "status field unchanged" (name still updates) or "resource unchanged" (whole request is inert). Neither the "PATCH is atomic" bullet (lines 31-34, which only covers rejection-on-violation, not acceptance-with-no-op) nor rule 6's text (lines 76-79) nor the PATCH /tarefas/{id} description (lines 368-374) resolves this. Two conformant implementations could diverge on observable behavior here — this is precisely the "two implementers, same spec, different behavior" failure mode.
+
+## MAJOR
+
+3. **`InvalidRequestBody` response component is internally over-scoped relative to its single reference.** `components.responses.InvalidRequestBody` (lines 468-485) is referenced only by `POST /projetos` (line 127). Yet it bundles `taskTitleInvalid` and `completedAtSubmitted` (task-only fields, impossible on a project-creation body) and `emptyPatchBody` — and its own description text (lines 468-472) says "...or an empty `{}` `PATCH` body," even though its sole usage site is a POST, and `CreateProjectRequest` (lines 575-592) has no `minProperties` constraint, so "empty PATCH body" semantics don't even apply there. The component is wired to exactly one endpoint, yet most of its content describes scenarios that endpoint can't produce.
+
+4. **`InvalidStatusFilter` example references a route that doesn't exist.** Its `instance` value is `/tarefas?status=finished` (line 861) — there is no bare `GET /tarefas` collection endpoint anywhere in the spec; task listing only exists nested under `GET /projetos/{id}/tarefas`. This makes the example internally wrong regardless of which endpoint references it (compounds finding #1).
+
+5. **CLAUDE.md's invariant list has drifted from the spec it's supposed to mirror, and drops rule 6 entirely.** The actual `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md` (read at session start) lists only 5 invariants, numbered `3=forward-only transitions`, `4=completedAt internal`, `5=no tasks in archived project` — a different order than the spec's own numbering (spec: `3=completedAt`, `4=no-new-tasks-in-archived-project`, `5=forward-only`) — and has no entry at all corresponding to spec rule 6 (status locked when project archived). Since CLAUDE.md declares the spec the single source of truth and is meant to guide both stacks' implementers, this drift means anyone building strictly from CLAUDE.md's list would both misalign rule numbers 3/4/5 against the spec text and completely miss implementing rule 6.
+
+## MINOR
+
+6. **Shared examples carry hardcoded, context-wrong `instance` values when reused across structurally different endpoints**, contradicting `ProblemDetails.instance`'s own description ("typically the relative request path," lines 726-728):
+   - `InvalidUuidPathParameter` (`instance: /tarefas/nao-e-um-uuid`, line 852) is reused for path-param errors on `/projetos/{id}` (line 209-210 inline oneOf, and via `InvalidPathParameter` at `GET /projetos/{id}` line 170-171) and `/projetos/{id}/tarefas` (line 329-330), where the real path shape differs entirely.
+   - `ProjectNameInvalid` (`instance: /projetos`, line 804) is reused at `PATCH /projetos/{id}` (line 211-212), where instance should be `/projetos/{id}`.
+   - `TaskTitleInvalid` (`instance: /projetos/{id}/tarefas`, line 816) is reused at `PATCH /tarefas/{id}` (line 405-406), where instance should be `/tarefas/{id}`.
+   - `CompletedAtSubmitted` (`instance: /tarefas/{id}`, line 828) is reused at `POST /projetos/{id}/tarefas` (line 275-276), where there is no task id yet at request time and instance should reflect the collection URL.
+
+7. **`operationId` naming is an unaddressed middle ground between the spec's two stated conventions.** `createProjeto`, `listTarefas`, `updateProjeto`, etc. mix Portuguese domain nouns into otherwise-camelCase identifiers. The "Naming convention" bullet (lines 52-61) explicitly scopes the English-naming rule to "schemas, parameters, responses, and examples," never mentioning `operationId`, leaving codegen'd client/server method names inconsistently positioned between the URL-Portuguese and schema-English conventions.
+
+8. **Duplicated inline `oneOf` 400 blocks instead of a shared component.** The identical `oneOf: [ProblemDetails, ValidationProblemDetails]` structure is repeated verbatim at `PATCH /projetos/{id}` (205-207), `POST /projetos/{id}/tarefas` (267-269), and `PATCH /tarefas/{id}` (399-401), rather than being factored into a `components.responses` entry the way the other three 400 flavors were. Not a functional bug, but inconsistent with the DRY pattern established elsewhere and a maintenance risk (the three copies could silently diverge).
+
+## What is genuinely clean this pass
+
+- The rename set (TarefaPriority→TaskPriority, ProjetoId→ProjectIdParam, etc.) is complete — no orphaned old-name references found anywhere.
+- All five 422 business-rule examples (rules 1, 2, 4, 5, 6) exist, each with a distinct `type` URI, and are wired to exactly the correct single endpoint each.
+- Rule 6 is now a genuine blacklist with no leftover "all fields locked" language; the no-op-beats-rule-6 precedence is stated identically (no contradiction) in the scope bullet, rule 6's own text, and the PATCH /tarefas/{id} description.
+- The 400→404→422 validation-precedence claim holds up against every endpoint's actual response ordering — no endpoint contradicts it.
+- No orphaned schemas, parameters, or `components.responses` entries; every example is referenced at least once.
+- `examples` key casing (PascalCase definitions / camelCase usage) is applied consistently everywhere.
+- `completedAt`/`id`/`createdAt`/`projectId` are correctly `readOnly`; `priority` is correctly required on `CreateTaskRequest`; enums are closed; `date-time` format and camelCase field naming are consistent throughout.
+
+Relevant file: `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` (all findings above), cross-checked against `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md` (finding 5).</result>
+<usage><subagent_tokens>20296</subagent_tokens><tool_uses>1</tool_uses><duration_ms>328865</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-04 16:59**
+
+First: fix CLAUDE.md — align its invariants list exactly to the spec's business
+rules 1-6 (same order, same numbering, rule 6 included). Show me the diff of
+that file before continuing.
+
+Then apply round-3 resolutions to spec/openapi.yaml:
+
+DECISION #2: no-op is per-field, not per-request. Reword the same-state bullet:
+resubmitting a field's current value is not a state transition and triggers no
+transition rules; other fields in the same request apply normally; PATCH remains
+atomic on rule violations. Reflect this in PATCH /projetos/{id} and
+PATCH /tarefas/{id} descriptions.
+
+STRUCTURAL (#1/#3/#6/#8): replace the three shared 400 response components with
+per-context ones, each carrying only its relevant examples:
+- PathParamBadRequest (malformed UUID) — every {id} endpoint
+- ProjectBodyBadRequest (name invalid) — POST /projetos
+- ProjectPatchBodyBadRequest (name invalid, empty {} minProperties) — PATCH /projetos/{id}
+- TaskCreateBodyBadRequest (title invalid, missing priority) — POST /projetos/{id}/tarefas
+- TaskPatchBodyBadRequest (title invalid, completedAt submitted, empty {}) — PATCH /tarefas/{id}
+- ProjectStatusFilterBadRequest (invalid PROJECT status value) — GET /projetos
+- TaskFiltersBadRequest (invalid task status + invalid priority) — GET /projetos/{id}/tarefas
+Remove `instance` from all reusable examples (optional per RFC 7807; hardcoded
+paths are wrong outside their original context) — keep it only in the five
+single-use business-rule examples. Factor the thrice-duplicated
+oneOf [ProblemDetails, ValidationProblemDetails] into a named schema
+AnyProblemDetails and reference it. Ensure no orphaned components remain after
+the swap.
+
+FIXES: #4 falls out of the split (the misplaced example is gone; the project
+filter example now uses an invalid PROJECT status like "finished" — verify no
+example references a nonexistent bare /tarefas route). #7: extend the naming
+convention to operationIds — English verbs+nouns (createProject, listProjects,
+getProject, updateProject, createTask, listTasks, getTask, updateTask,
+deleteTask); rename all and restate the convention scope.
+
+Do not change anything else. Summarize every change.
+
+---
+**2026-07-04 17:05**
+
+ignore this last prompt because it is the same as the previous one. Continue with the previous task
+
+---
+**2026-07-04 17:05**
+
+/revisar rodada 3: (a) a própria IA admitiu que o CLAUDE.md que ela reescreveu na rodada 1 ficou defasado/errado (numeração divergente e regra 6 ausente) — corrigido e verificado por diff; lição: instruir a IA a editar um arquivo não garante que a edição aconteceu como pedido, diffs são obrigatórios. (b) A consolidação de 400s da rodada 2 foi uma sobre-correção: componentes de response compartilhados arrastam todos os exemplos para todos os endpoints; resolvido com componentes por contexto. (c) Decisão: no-op de status é por campo, não por request — os demais campos do mesmo PATCH aplicam normalmente.
+
+---
+**2026-07-04 17:06**
+
+/log-ai rodada 3 de revisão adversarial — reestruturação dos 400s por contexto e correção de drift do CLAUDE.md
+
+---
+**2026-07-04 17:07**
+
+Use the spec-reviewer agent to review spec/openapi.yaml again. Findings grouped by severity.
+
+---
+**2026-07-04 17:14**
+
+<task-notification>
+<task-id>acdd6bba9c1c4bc96</task-id>
+<tool-use-id>toolu_01KSTCzunazVwHa23BQQ5aAK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/f5eb6a40-0e77-40e0-a35d-560c990fbcd4/tasks/acdd6bba9c1c4bc96.output</output-file>
+<status>completed</status>
+<summary>Agent "Fourth review pass openapi.yaml" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I did a full fresh pass over `spec/openapi.yaml` (907 lines) and cross-checked it against `CLAUDE.md`. Several things that were flagged in earlier rounds are now genuinely fixed — I'll say so explicitly rather than re-flagging them. I found two new substantive issues (one blocker, one major) that appear to be artifacts of this round's specific changes, plus a handful of minor completeness gaps.
+
+## What's now clean (verified, not re-flagged)
+
+- **7 response components are wired 1:1 to the correct endpoints with no over/under-scoping** — I traced every one of `PathParamBadRequest`, `ProjectBodyBadRequest`, `ProjectPatchBodyBadRequest`, `TaskCreateBodyBadRequest`, `TaskPatchBodyBadRequest`, `ProjectStatusFilterBadRequest`, `TaskFiltersBadRequest` against the real causes reachable at each `400` site (path param / body / query, per endpoint). All correct — this is the exact defect class from rounds 2/3, and it's gone.
+- **No orphaned or dangling components.** Every entry under `components.responses`, `components.parameters`, `components.schemas`, `components.examples` is `$ref`'d at least once; every `$ref` in the file resolves to a real component (grepped all ~70 `$ref`s and cross-matched).
+- **Schema-vs-example shape consistency is correct**: `ProjectStatusFilterBadRequest`/`TaskFiltersBadRequest` correctly use plain `ProblemDetails` (their examples never have `errors[]`); `ProjectBodyBadRequest` correctly uses `ValidationProblemDetails`; the three `*BadRequest` responses combining path+body causes correctly use `AnyProblemDetails`, and each example used under them matches one of the two branches' shape.
+- **Per-field no-op wording is consistent everywhere** it's mentioned (info.description scope decision, rule 6, both PATCH operation descriptions) — no leftover "whole request is inert" phrasing found.
+- **CLAUDE.md rule 6 now matches the spec's rule 6 in substance** (title/description/priority whitelist, numbered identically 1–6 in both files, 422 tagging correct). Numbering 1–6 is byte-consistent between both files as read from disk.
+- **Business-rule-number citations** (`business rule #1` … `#6`) scattered through operation descriptions all point to the correct rule in every instance — no stale numbering.
+- **Naming convention** (English component/parameter/response/example names + operationIds, Portuguese-only paths, PascalCase component-example keys vs camelCase reference keys) is applied consistently everywhere.
+
+## Blocker
+
+1. **No precedence defined between simultaneously-applicable business rules 5 and 6 on `PATCH /tarefas/{id}`** (spec/openapi.yaml lines 331–350, 368–378). Since rule 1 forbids archiving a project with an `in_progress` task, any task in an archived project can only be `pending` or `done` — meaning *every* possible status-change attempt on such a task (e.g. `done→pending`, `done→in_progress`, `pending→done`) simultaneously violates rule 5 (backward/skip-ahead) **and** rule 6 (status locked while archived). The spec's only ordering rule ("Validation precedence", lines 49–56) governs 400→404→422 staging, not ordering *within* the 422 stage. Nothing tells an implementer whether to check "is this transition adjacency-valid" or "is the project archived" first. Two conforming implementations can return different `type`/`detail` bodies (`task-status-regression` vs `task-status-change-project-archived`) for the identical request. This is exactly the class of defect the review is meant to catch — same status code (422), different response body, depending on implementer's check ordering.
+
+## Major
+
+2. **`AnyProblemDetails` oneOf (lines 765–773) is not actually mutually exclusive**, so it's logically broken as a `oneOf`. `ProblemDetails` (718–743) has no `additionalProperties: false`, so any payload containing an `errors` array (e.g. `EmptyPatchBody`, `ProjectNameInvalid`, `TaskTitleInvalid`, `TaskPriorityMissing`, `CompletedAtSubmitted` — all used under `AnyProblemDetails` at lines 450, 466, 483) validates successfully against **both** `ProblemDetails` and `ValidationProblemDetails` simultaneously, since `ValidationProblemDetails` is just `ProblemDetails` (allOf) plus a required `errors` field, and nothing forbids extra properties on the plain `ProblemDetails` branch. Per JSON Schema, `oneOf` requires matching *exactly one* subschema — these examples fail that constraint. This is not cosmetic: CLAUDE.md commits the Rails stack to the `committee` gem for OpenAPI conformance testing, and strict `oneOf` validators (ajv-based tooling included) will either reject these examples outright or behave inconsistently. Root cause is missing `additionalProperties: false` on `ProblemDetails` (or `oneOf`→`anyOf`, or a `not: required:[errors]` guard on the plain branch) — flagging the cause, not proposing the fix per role scope.
+
+## Minor
+
+3. **400-response descriptions/examples for body validation are non-exhaustive relative to what the schemas actually reject.** `ProjectBodyBadRequest` (433–441), `TaskCreateBodyBadRequest` (459–473), `ProjectPatchBodyBadRequest` (443–457), `TaskPatchBodyBadRequest` (475–492) each list specific causes ("invalid name", "invalid title", "missing priority") but none provides an example (or mentions in prose) for an out-of-enum body value (`priority: "urgent"`, `status: "foo"`) or an unknown/readOnly field submitted on `POST /projetos` / `POST /projetos/{id}/tarefas` (e.g. submitting `status` or `id` on create) — even though `additionalProperties: false` on `CreateProjectRequest`/`CreateTaskRequest` (596, 676) unambiguously rejects these. Not implementer-ambiguous (the schema is the source of truth), but the descriptions read as exhaustive lists and aren't — a documentation-completeness gap, and inconsistent with the fact that query-filter enum violations *do* get dedicated examples (`ProjectStatusFilterInvalid`, `TaskStatusFilterInvalid`, `TaskPriorityFilterInvalid`).
+
+4. **Shared `ProjectNotFound` example's hardcoded `instance` is wrong for 2 of its 4 use sites.** The single example at lines 528–534 hardcodes `instance: /projetos/3fa85f64-...` but `ProjectNotFound` is also `$ref`'d from `POST /projetos/{id}/tarefas` (260) and `GET /projetos/{id}/tarefas` (305), where the real request path would be `/projetos/{id}/tarefas`, not the bare project path. Low impact since `instance` is documented as "typically" the request path (non-normative), but it's a factually misleading shared example for two of its four consumers.
+
+5. **Tie-break behavior for simultaneous multi-filter violations is unspecified.** At `GET /projetos/{id}/tarefas` (line 271–305), if both `status` and `priority` query filters are invalid at once, `TaskFiltersBadRequest`'s schema is plain `ProblemDetails` (no per-field `errors[]`), so only one filter's violation can be surfaced per response, and nothing states which one wins. Similarly, `ValidationProblemDetails.errors` (745–763) doesn't state whether an implementation must report *all* violating fields or may return just the first found. Neither ambiguity changes the HTTP status/type category, but response bodies could differ between implementations — low severity, worth a one-line clarification.
+
+6. **Stylistic inconsistency (borderline, likely intentional):** `ProjectNotFound`/`TaskNotFound` (523–547) embed their example payload inline via singular `example:` rather than the `examples:`-map-referencing-`components.examples` pattern used by every other response in the file. Functionally harmless and consistent with this round's stated intent to keep instance only "on... the 2 NotFound responses" as single-use inline examples — flagging only for completeness, not recommending a change.
+
+## Bottom line
+
+The file is materially better than a "genuinely clean" verdict would suggest — the structural wiring problems from rounds 2/3 are resolved, and there are no orphans/dangling refs/naming drift left. But this round introduces one real blocker (rule 5/6 evaluation-order ambiguity on task PATCH, likely a side effect of documenting rules 5 and 6 as parallel bullets without stating precedence) and one real major (the new `AnyProblemDetails` oneOf is not actually exclusive, a defect intrinsic to this round's newly-added schema). Both should be fixed before implementation starts, since CLAUDE.md's own methodology treats the spec as the single source of truth that two independent stacks (Quarkus, Rails) must derive identical behavior from.</result>
+<usage><subagent_tokens>53566</subagent_tokens><tool_uses>3</tool_uses><duration_ms>378795</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-04 17:16**
+
+Apply round-4 resolutions to spec/openapi.yaml:
+
+BLOCKER #1: define 422-internal precedence. Add to the validation-precedence
+paragraph: within 422, state-level preconditions are evaluated before
+transition/value-level rules — for PATCH /tarefas/{id}, rule 6 (task's project
+archived) is checked before rule 5 (transition validity), so a request
+violating both returns rule 6's type URI. Reflect this in rule 6's text and in
+PATCH /tarefas/{id}'s 422 description.
+
+MAJOR #2: delete AnyProblemDetails entirely. Every 400 context is deterministic
+after the per-context split: all body-validation 400 components use
+ValidationProblemDetails (including completedAt/unknown-field cases, reported
+via errors[]); all path-param and query-param 400 components use plain
+ProblemDetails. Update every affected response schema and verify the examples
+still validate against their now-concrete schemas. No orphaned components.
+
+MINORS: #3 add two examples (out-of-enum body value: priority "urgent" on task
+create; unknown field on create) and a note per body-400 component that
+examples are illustrative, not exhaustive. #4 remove instance from
+ProjectNotFound and TaskNotFound examples (they are reused across routes —
+same rationale as round 3). #5 document error-reporting policy: body
+validation returns ALL field errors in errors[]; query-param validation
+returns the FIRST invalid parameter, evaluated in documented order (status,
+then priority). #6 convert ProjectNotFound/TaskNotFound to the examples:-map
+pattern used everywhere else.
+
+Do not change anything else.
+
+---
+**2026-07-04 17:36**
+
+/revisar rodada 4: (a) blocker real — regras 5 e 6 podiam colidir no mesmo request sem precedência definida dentro do 422; decisão: precondições de estado (regra 6) antes de regras de transição (regra 5), generalizado como princípio. (b) O AnyProblemDetails criado na rodada 3 era um oneOf quebrado para validadores estritos (ramos não exclusivos) — e desnecessário: após a divisão por contexto, cada 400 tem schema determinístico; componente eliminado. Lição: cada rodada de correção pode introduzir o defeito da rodada seguinte — revisão adversarial precisa rodar até estabilizar, mas com critério de parada.
+
+---
+**2026-07-04 17:38**
+
+/log-ai rodada 4 (final) de revisão adversarial do openapi.yaml
+
+---
+**2026-07-04 17:39**
+
+Use the spec-reviewer agent to review spec/openapi.yaml again. Findings grouped by severity.
+
+---
+**2026-07-04 17:46**
+
+<task-notification>
+<task-id>a013d3b7b93b2898b</task-id>
+<tool-use-id>toolu_01H3hfYT77pKxXfYMeSnLoEv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/f5eb6a40-0e77-40e0-a35d-560c990fbcd4/tasks/a013d3b7b93b2898b.output</output-file>
+<status>completed</status>
+<summary>Agent "Fifth review pass openapi.yaml" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed `spec/openapi.yaml` end-to-end (all 981 lines) against `CLAUDE.md`, tracing every response, example, and scope-decision cross-reference. Findings below, grouped by severity, with the stopping criterion applied explicitly to each.
+
+## Critical / Blocker (behavior-changing — two implementers could diverge)
+
+**1. Undefined precedence between an invalid path parameter and an invalid body, for every POST/PATCH endpoint that has both.**
+Location: `info.description` "Validation precedence" (lines 49–63) and "Error-reporting policy for `400`" (lines 64–70); manifests in `TaskCreateBodyBadRequest` (474–512), `ProjectPatchBodyBadRequest` (474–491), `TaskPatchBodyBadRequest` (514–533) — each lists `invalidPathParameterFieldError` as a sibling/alternate `examples:` entry next to body-field examples (e.g. `taskTitleInvalid`, `completedAtSubmitted`), never a combined example.
+Why it matters: the precedence bullet groups "invalid path parameter, invalid query parameter, or invalid body" into one undifferentiated "`400` stage," and the error-reporting bullet only defines completeness *within* body validation ("reports every violating field at once") and *within* query validation ("first invalid parameter... status before priority"). Nothing says what happens when the path id is malformed **and** the body is also malformed on the same request (e.g. `PATCH /tarefas/not-a-uuid` with `{"title": ""}`). Implementer A could short-circuit on path and return only `field: id`; Implementer B could validate the whole schema first and return only the body's `field: title`; Implementer C could merge both into one `errors[]` array. All three satisfy the spec as written but produce different response bodies for the identical request — this is exactly the "same spec, different behavior" failure mode the review is meant to catch.
+
+**2. Undefined precedence between an invalid path parameter and invalid query parameters, for `GET /projetos/{id}/tarefas`.**
+Location: `TaskFiltersBadRequest` (547–562) offers `invalidUuidPathParameter`, `taskStatusFilterInvalid`, `taskPriorityFilterInvalid` as parallel examples on a single-problem (non-array) `ProblemDetails` schema; the "Error-reporting policy" bullet (64–70) only fixes the sub-order *among query params* ("status before priority") and never mentions where the path check falls in that order. A charitable reading — "the order parameters are documented on the operation," and the path parameter is documented before the operation's own query parameters — could be argued to imply path-first, but this is never stated and nothing else in the doc reinforces that reading. Same failure mode as #1: `GET /projetos/bad-uuid/tarefas?status=nope` is genuinely underspecified.
+
+Together, #1 and #2 are the actual residual gap left by the otherwise-thorough rule-5/rule-6 precedence work (see verdict on that below) — the ambiguity moved from the `422` stage down into the `400` stage, and wasn't closed there.
+
+**3. `Location` header on both `201` responses is not `required: true`.**
+Location: `POST /projetos` (lines 141–149) and `POST /projetos/{id}/tarefas` (lines 262–270) — both define the `Location` header object with `description`/`schema`/`example` but no `required: true`. Per OpenAPI 3.0, header objects default to non-required. As written, an implementation that omits `Location` on `201` still validates against the spec, which directly contradicts the review checklist's "201+Location on POST" expectation and is a one-line fix (`required: true` on both).
+
+## Major (behavior-relevant, lower probability of actual divergence)
+
+**4. No stated behavior for unrecognized query parameters.**
+Location: `GET /projetos` (157–181), `GET /projetos/{id}/tarefas` (289–323) — only `status`/`priority` are declared; nothing analogous to the bodies' `additionalProperties: false` exists for query strings. Whether `?foo=bar` is rejected (`400`) or silently ignored is left to framework defaults, which commonly differ between a strict Quarkus/RESTEasy validator and default Rails param handling. Real risk, but lower than #1/#2 since most frameworks default to "ignore unknown query params," so convergence is likely even without a spec statement — still worth a one-line decision.
+
+## Minor (non-blocking documentation polish — meets the stopping criterion)
+
+**5.** Inconsistent presence of the optional RFC 7807 `instance` member: omitted from all `400` examples and both `404` examples (`ProjectNotFound`/`TaskNotFound`, 801–815), but present in every `422` example (817–860). `instance` is optional in the `ProblemDetails` schema (772–777) throughout, so this is purely stylistic and not conformance-testable.
+
+**6.** `description` on `Project` (612–615) and `Task` (680–683) is nullable but not `required`, so the schema permits either omitting the key or sending explicit `null` when unset — both stacks conform either way. Only worth tightening if byte-for-byte response parity between Quarkus and Rails matters for the grading harness.
+
+**7. (Informational, not a spec defect.)** The `CLAUDE.md` content injected into this session's context differs from the file currently on disk: the injected snapshot lists only 5 numbered invariants (missing rule 6 entirely, and mismatched numbering vs. the spec's rule 3/4/5). I re-read `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md` directly and confirmed the **actual on-disk file already lists all 6 invariants**, numbered and worded consistently with the spec's "Business rules" section (lines 90–107), including rule 6. No spec or CLAUDE.md change is needed — flagging only so the stale in-context copy isn't mistaken for real repo state.
+
+## Explicit answers to the targeted checks
+
+- **Rule 5/6 precedence completeness**: Confirmed sound and complete for its stated purpose. `PATCH /tarefas/{id}` is the only endpoint where two `422` rules can simultaneously apply, and it's resolved in three consistent places (lines 56–63, 100–107, 360–370: rule 6 wins). No other endpoint has more than one active business rule, so no other 422-vs-422 combination exists anywhere in the spec.
+- **Rule 3 (`completedAt`) combined with a status transition in the same PATCH body**: Already fully resolved, not a gap — `completedAt` is excluded from `UpdateTaskRequest`'s properties (725–751) with `additionalProperties: false`, so submitting it is a whole-body schema failure at the `400` stage, which the general macro precedence (400 before 404 before 422, lines 49–56) always evaluates before any `422` business-rule check runs, regardless of what status value is also present.
+- **ValidationProblemDetails/ProblemDetails split**: Verified fully consistent — every example wired to a `*BodyBadRequest` component (backed by `ValidationProblemDetails`) carries `errors[]`, and every example wired to a plain-`ProblemDetails` response (`PathParamBadRequest`, `ProjectStatusFilterBadRequest`, `TaskFiltersBadRequest`, `ProjectNotFound`, `TaskNotFound`, and all `422` responses) omits `errors[]`. No mismatches found this round.
+- **Orphaned/dangling components**: None found. Grepped for `AnyProblemDetails`, `InvalidStatusFilter`, `InvalidPriorityFilter` — zero hits; every `components.examples`, `components.responses`, `components.parameters`, and `components.schemas` entry is referenced exactly where expected.
+
+## Stopping-criterion verdict
+
+Not yet reached. Findings #1–#3 are genuine behavioral ambiguities/contract gaps — they would let a Quarkus implementer and a Rails implementer both claim spec compliance while returning different HTTP response bodies for identical inputs. Recommend one more short pass to: (a) add one sentence establishing the sub-order for path-parameter vs. body vs. query-parameter checks within the `400` stage (covering both the POST/PATCH-with-body case and the `GET /projetos/{id}/tarefas` path+query case), and (b) add `required: true` to both `Location` headers. Item #4 is worth a one-line decision but is lower risk. Items #5–#7 are legitimately below the stopping criterion — they don't change observable behavior and can be left as-is if only they remain after the next pass.</result>
+<usage><subagent_tokens>43758</subagent_tokens><tool_uses>3</tool_uses><duration_ms>397079</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-04 23:25**
+
+Apply round-5 resolutions to spec/openapi.yaml — final pass:
+
+#1/#2: extend the validation-precedence paragraph with sub-order inside the 400
+stage: path parameters → query parameters → request body, fail-fast — only the
+first failing category is reported, and a request failing an earlier category
+never has later ones evaluated (e.g. PATCH /tarefas/not-a-uuid with an invalid
+body returns only the invalid-path-parameter problem). Rationale to include:
+path params identify the resource being addressed; this also matches native
+JAX-RS and Rails behavior. The all-field-errors-in-errors[] policy applies
+within the body stage only. Reflect this in the descriptions of the three
+endpoints that take both a path id and a body.
+
+#3: required: true on the Location header of both 201 responses.
+
+#4: add a scope-decision bullet: unrecognized query parameters are silently
+ignored (tolerant reader; native behavior of both target frameworks), not
+rejected — deliberate decision.
+
+Leave findings #5 and #6 as-is (accepted, below the stopping criterion).
+Do not change anything else. Summarize the changes.
+
+---
+**2026-07-04 23:28**
+
+/revisar rodada 5 (final): sub-ordem dentro do estágio 400 (path → query → body, fail-fast) — sem ela, os dois stacks divergiriam no mesmo request inválido; a política escolhida coincide com o comportamento nativo de JAX-RS e Rails. Location tornado required nos 201 (antes uma implementação podia omiti-lo e ainda validar). Query params desconhecidos: ignorados silenciosamente, agora como decisão documentada. Bônus de processo: o próprio agente detectou que o CLAUDE.md no contexto da sessão estava defasado em relação ao disco e verificou o arquivo real antes de reportar — lição registrada: contexto de sessão envelhece; a verdade é o filesystem.
+
+---
+**2026-07-04 23:29**
+
+/log-ai rodada 5 e encerramento da fase de especificação
+
+---
+**2026-07-04 23:30**
+
+Use the spec-reviewer agent to review spec/openapi.yaml again. Findings grouped by severity.
+
+---
+**2026-07-04 23:37**
+
+<task-notification>
+<task-id>a9c5c8775573ebe24</task-id>
+<tool-use-id>toolu_01MPvzexKbwGmSE4tCTzCsmk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/f5eb6a40-0e77-40e0-a35d-560c990fbcd4/tasks/a9c5c8775573ebe24.output</output-file>
+<status>completed</status>
+<summary>Agent "Sixth review pass openapi.yaml" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># TaskFlow OpenAPI Spec — Sixth-Pass Adversarial Review
+
+Reviewed fresh (no assumptions carried over from prior rounds): `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` (1017 lines), cross-checked against `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md`.
+
+## Summary verdict
+
+This document is very close to the stopping criterion. I traced every `$ref` (all resolve; no orphaned/dangling components), re-derived the five 422 business rules (rules 1, 2, 4, 5, 6 — rule 3 is correctly modeled as `400`, not `422`) and confirmed each has a distinct `type` URI and a conforming example. I re-verified the round-6 `400`-stage sub-order addition against all nine operations and it is complete and internally consistent — every operation with 2+ `400`-causing categories (`PATCH /projetos/{id}`, `POST /projetos/{id}/tarefas`, `GET /projetos/{id}/tarefas`, `PATCH /tarefas/{id}`) is correctly cross-referenced, and none of the single-category operations were incorrectly given the cross-reference. `CLAUDE.md` is fully consistent with the spec's rule numbering and wording (rule 3 correctly noted as 400 in both places) — no update needed there.
+
+I found one genuine behavior-affecting gap (not introduced in round 6, but still open) and a small number of non-blocking polish items.
+
+---
+
+### Finding 1 — BLOCKER (behavior-changing): collection ordering is unspecified for both list endpoints
+
+**Location:** `GET /projetos` (`spec/openapi.yaml:180-204`) and `GET /projetos/{id}/tarefas` (`spec/openapi.yaml:319-356`); also the "No pagination" scope-decision bullet (`spec/openapi.yaml:9-14`).
+
+Neither operation, nor the `info.description` scope decisions, states an ordering guarantee for the returned array (e.g. "ordered by `createdAt` ascending"). The "No pagination" bullet only commits to "the full matching collection as a single JSON array" — it says nothing about element order.
+
+A JPA/Panache-based Quarkus implementation with no explicit `ORDER BY` and an ActiveRecord `Model.all`/`where(...)` call in Rails will each fall back to their own database's default row-return order, which is not guaranteed to be the same (and isn't even guaranteed to be stable across query plans for either engine). Two independent implementations built strictly from this spec can therefore produce arrays containing the identical set of resources in a different order — this is directly observable in the HTTP response body, not merely an internal implementation detail, and it is exactly the kind of divergence the review brief defines as blocking ("anything that would let two implementers build different behavior from the same spec"). A one-line addition (e.g. "ordered by `createdAt` ascending") would close this deterministically.
+
+This is not a round-6 artifact — it has evidently been open since before round 5 — but it was asked to be re-derived fresh rather than assumed resolved, and it is still present.
+
+---
+
+### Finding 2 — Minor, non-blocking: presence-vs-null ambiguity for optional/nullable response fields
+
+**Location:** `Task.completedAt` (`spec/openapi.yaml:728-732`), `Task.description` / `Project.description` (`spec/openapi.yaml:648-651`, `716-719`).
+
+These fields are `nullable: true` but absent from each schema's `required` list. Nothing in the spec states whether an implementation must always emit the key (with `null` when unset) or may omit it entirely. In practice a Jackson-serialized Quarkus response and a Rails `as_json`/serializer response typically both include the key as `null` by default, so this is unlikely to manifest in practice — and, importantly, both "key present with `null`" and "key absent" validate equally against the current schema, so this would not cause a conformance-test (e.g. committee gem, RestAssured JSON-schema) failure either way. I'm flagging it because it's a real, if narrow, contract ambiguity for hand-written client code (`response.completedAt === null` vs `'completedAt' in response`), but per the stated stopping criterion this qualifies as non-blocking documentation polish, not a blocker.
+
+---
+
+### Finding 3 — Minor, non-blocking: `instance` present in 404/422 examples, absent from all `400` examples
+
+**Location:** compare `ArchiveBlockedByInProgressTask`, `TaskDeleteNotPending`, `TaskCreateInArchivedProject`, `TaskStatusRegression`, `TaskStatusChangeBlockedArchivedProject`, `ProjectNotFound`, `TaskNotFound` (all include `instance`, lines 837-897) against every `400` example (`ProjectNameInvalid` through `TaskPriorityFilterInvalid`, lines 898-1017 — none include `instance`).
+
+`instance` is optional in the `ProblemDetails` schema (`required: [type, title, status]`, line 814), so this is schema-valid either way and doesn't change conformance outcomes. It's a stylistic inconsistency only — worth a one-line editorial fix if the authors want the example set to feel uniform, but it does not create any behavioral divergence between implementations since `instance` isn't asserted anywhere.
+
+---
+
+### Finding 4 — Minor, non-blocking: cross-references point to "`info.description`" generically rather than to the specific bullet
+
+**Location:** the four operation descriptions added in round 6 — `PATCH /projetos/{id}` (line 239-240), `POST /projetos/{id}/tarefas` (line 280-281), `GET /projetos/{id}/tarefas` (line 329-330), `PATCH /tarefas/{id}` (line 409-410) — each says "see the `400`-stage sub-order in `info.description`" rather than naming the "Validation precedence" bullet specifically.
+
+Purely a navigability nit for a human reading the rendered spec; the content itself is accurate and not contradictory (verified: all four cross-references correctly describe path-before-body or path-before-query for their respective operation, matching the central bullet exactly, with no operation incorrectly omitted or included). No behavioral ambiguity results.
+
+---
+
+### Explicitly checked and found sound (no findings)
+
+- All five 422 business rules (1, 2, 4, 5, 6) have distinct `type` URIs and example payloads with matching `status` values; rule 3 is consistently modeled as `400` in both the spec and `CLAUDE.md`.
+- The new `400`-stage sub-order (path → query → body) is applied to exactly the four operations that need it, and to no operation that doesn't (verified against all 9 operations' actual category counts).
+- The within-`422`-stage ordering (rule 6 before rule 5 on `PATCH /tarefas/{id}`) is stated once, unambiguously, and not contradicted elsewhere.
+- The new "unrecognized query parameters are ignored" bullet doesn't contradict the strict `additionalProperties: false` body-validation regime — it's correctly scoped to query strings only, with rationale.
+- `required: true` on both `Location` headers is valid, appropriate OpenAPI 3.0 usage.
+- No orphaned `components.schemas`/`responses`/`examples`/`parameters` — every one is referenced at least once (confirmed via full `$ref` extraction).
+- 404 defined everywhere a path param can miss; 400 (malformed UUID) defined on every path-parameterized operation; 201+Location on both POST endpoints; 204 (no body) on DELETE.
+- Enums are closed (OpenAPI `enum` keyword); `completedAt`, `id`, `createdAt`, `projectId` are `readOnly`; `priority` is required on task creation.
+- PATCH semantics (partial update, atomicity, same-state no-op, unknown/readOnly-field rejection) are unambiguous and internally consistent.
+- Query filters are typed as the closed enums, with defined 400 behavior and a defined first-invalid-parameter reporting order.
+- `CLAUDE.md` is byte-consistent with the spec's business-rule numbering and content; no updates needed there.
+
+---
+
+## Files referenced
+
+- `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml`
+- `/Users/tiagofvalerio/Development/taskflow-sdd/CLAUDE.md`
+
+If the ordering gap (Finding 1) is fixed with a one-line addition to the two list-endpoint descriptions (or to the "No pagination" scope-decision bullet), and the team is comfortable treating Findings 2-4 as documentation polish, this document meets the stated stopping criterion.</result>
+<usage><subagent_tokens>56851</subagent_tokens><tool_uses>3</tool_uses><duration_ms>386948</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-04 23:38**
+
+Apply round-6 resolution to spec/openapi.yaml — ordering only:
+
+#1: both list endpoints (GET /projetos and GET /projetos/{id}/tarefas) guarantee
+deterministic ordering: createdAt ascending, with id ascending as tie-breaker
+(total order — createdAt alone can collide). State it in each endpoint's
+description and extend the "No pagination" scope bullet: the response is a full
+array in this defined order; ordering is part of the contract and covered by
+contract tests.
+
+Findings #2, #3, #4: explicitly accepted as-is (below stopping criterion,
+categories already accepted in round 5). Do not change anything else.
+Summarize the change.
+
+---
+**2026-07-04 23:40**
+
+/revisar rodada 6: gap real que sobreviveu a 5 rodadas — nenhum endpoint de listagem declarava garantia de ordenação; JPA sem ORDER BY e ActiveRecord .all herdariam a ordem arbitrária do banco, produzindo respostas observáveis diferentes entre os dois stacks (e flakes nos testes de contrato). Correção: createdAt ASC com id ASC como desempate (ordem total — timestamps podem colidir em fixtures de teste). Lição: revisão adversarial enxerga o que está escrito errado, mas demora a enxergar o que não está escrito — propriedades transversais (ordenação, encoding, timezone) merecem checklist próprio, não descoberta incidental.
+
+---
+**2026-07-04 23:40**
+
+/log-ai rodada 6 — garantia de ordenação nas listagens
+
+---
+**2026-07-04 23:41**
+
+Final targeted check, not a full review round: scan spec/openapi.yaml ONLY for
+unstated cross-cutting behaviors of the same class as the ordering gap —
+properties where two implementations would observably diverge because nothing
+is written. Checklist: response content-type consistency (application/json vs
+application/problem+json), datetime format/timezone (UTC? offset allowed?),
+UUID casing on output, null-vs-absent policy for optional response fields,
+trailing-slash handling. Report only genuine behavioral divergence risks; no
+style findings. If none: say "converged" and nothing else.
+
+---
+**2026-07-04 23:43**
+
+Final two fixes to spec/openapi.yaml, then the spec is frozen:
+
+1. Datetime policy: add to the conventions in info.description and to the
+   descriptions of createdAt/completedAt in the Task and Project schemas — all
+   date-time output is UTC with Z suffix (RFC 3339, e.g. 2024-01-01T10:00:00Z);
+   offsets are never emitted. Update every datetime example to Z form if any
+   aren't already.
+
+2. Trailing slash: add a scope bullet — canonical paths have no trailing slash;
+   requests to non-canonical forms (e.g. /projetos/) are outside the contract:
+   behavior is unspecified and excluded from conformance testing.
+
+Do not change anything else. Summarize.
+
+---
+**2026-07-04 23:45**
+
+/revisar varredura final de propriedades transversais: dois riscos reais que 6 rodadas de revisão do texto não pegaram — timezone de datetime (Jackson emite Z, Rails por padrão emite offset da zona configurada: mesmo instante, strings diferentes) e trailing slash (roteamento diverge entre RESTEasy e Rails). Decisões: UTC Z obrigatório; URLs não-canônicas fora do contrato (custo zero de implementação vs forçar 404/normalização nos dois stacks). Confirma a lição da rodada 6: ausências exigem checklist dirigido, não releitura.
+
+---
+**2026-07-04 23:46**
+
+/log-ai varredura de ausências e congelamento da spec

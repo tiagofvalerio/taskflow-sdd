@@ -1,0 +1,1042 @@
+openapi: 3.0.3
+
+info:
+  title: TaskFlow — Projetos & Tarefas API
+  version: 1.0.0
+  description: |
+    API for managing Projetos (Projects) and Tarefas (Tasks).
+
+    ## Scope decisions
+    - **No pagination.** List endpoints (`GET /projetos`, `GET /projetos/{id}/tarefas`)
+      return the full matching collection as a single JSON array, in a
+      defined order (`createdAt` ascending, `id` ascending as tie-breaker —
+      see each operation's description). This is a deliberate scope
+      decision for this challenge, not an oversight. Ordering is part of
+      the contract, not an implementation detail left to each stack's
+      database defaults, and is covered by contract tests. A future
+      revision may introduce `limit`/`cursor` query params without breaking
+      existing clients, since the response is currently a bare array.
+    - **No `DELETE /projetos`.** Deleting a project is out of scope for this
+      challenge — a deliberate decision, not an oversight. Projects are
+      deactivated via `PATCH /projetos/{id}` with `status: archived`, never
+      removed. A future revision may add project deletion with its own
+      cascade/authorization rules.
+    - **Un-archiving is allowed.** `PATCH /projetos/{id}` may set `status`
+      from `archived` back to `active`. This is deliberate: no invariant
+      guards this direction (business rule 1 only guards *archiving*), and
+      reactivating a project makes its tasks transitionable again — a
+      `pending` task that was stuck (business rule 6) can move to
+      `in_progress` once its project is `active` again.
+    - **PATCH is a partial update.** Only the fields listed under each resource's
+      `*Update` schema are patchable. Submitting any other field — whether it is
+      unknown to the API or a `readOnly` field of the resource (e.g. `id`,
+      `createdAt`, `projectId`, `completedAt`) — is rejected with `400` because
+      every request schema declares `additionalProperties: false`.
+    - **PATCH is atomic.** If any part of a `PATCH` request violates a
+      business rule, the entire request is rejected with `422` and nothing is
+      persisted — there is no partial application where some fields land and
+      others don't.
+    - **Same-state PATCH is a no-op, per field.** Resubmitting a field's
+      current value (e.g. `status: active` on an already-`active` project,
+      `status: done` on an already-`done` task) is not a state transition and
+      triggers no transition rule for that field — it is accepted. Other
+      fields submitted in the same request apply normally: e.g.
+      `{"status": "active", "name": "New Name"}` on an already-`active`
+      project updates `name` and leaves `status` untouched, both succeeding
+      together in the same `200`. This is per-field, not "the request has no
+      effect" — PATCH remains atomic on rule violations (see above); a
+      same-state `status` never itself causes a rejection, but any other
+      field or rule violation in the same request is still evaluated and can
+      still fail the whole request. This also takes precedence over business
+      rule 6: resubmitting a task's current `status` is a no-op even when its
+      project is `archived` — a no-op is not a status *change*.
+    - **Validation precedence.** When a request could fail more than one way,
+      checks run in a fixed order and stop at the first failure: `400`
+      (malformed request) is evaluated first, then `404` (does the resource
+      exist), then `422` (business rules). A request that fails an earlier
+      stage never reaches a later one — e.g. a non-UUID path `id` always
+      yields `400`, never `404`, regardless of whether a resource with that
+      literal string could ever exist. Within the `400` stage itself, the
+      sub-order is **path parameters → query parameters → request body**,
+      also fail-fast: only the first failing category is reported, and a
+      request that fails an earlier category never has later ones evaluated
+      — e.g. `PATCH /tarefas/nao-e-um-uuid` with an invalid body returns
+      only the invalid-path-parameter problem, never a body-validation
+      error alongside it. Rationale: the path parameter identifies *which*
+      resource the request addresses, so it's meaningless to validate
+      anything else before that's settled; this also matches the native
+      behavior of both target frameworks (JAX-RS resolves path parameters
+      before invoking body validation; Rails routing resolves path segments
+      before the controller parses params). This ordering applies to every
+      operation with more than one category to check — `PATCH
+      /projetos/{id}`, `POST /projetos/{id}/tarefas`, `GET
+      /projetos/{id}/tarefas`, and `PATCH /tarefas/{id}`. Within the `422`
+      stage itself, state-level preconditions are checked before
+      transition/value-level rules: on `PATCH /tarefas/{id}`, business rule
+      6 (is the task's project archived?) is evaluated before business rule
+      5 (is the requested transition valid?). A status-change request that
+      violates both at once — only possible for a task in an archived
+      project, since business rule 1 already keeps such a task out of
+      `in_progress` — returns rule 6's `type` URI, never rule 5's.
+    - **Error-reporting policy for `400`.** This applies *within* the body
+      stage only (see the sub-order above — by the time body validation
+      runs, path and query parameters are already known-valid). Body
+      validation (`ValidationProblemDetails`) reports every violating field
+      at once in `errors[]`. Query-parameter validation (plain
+      `ProblemDetails`, one problem per response) reports only the *first*
+      invalid parameter, evaluated in the order the parameters are
+      documented on the operation — for `GET /projetos/{id}/tarefas`, that
+      means `status` is checked before `priority`.
+    - **Unrecognized query parameters are ignored.** A query string
+      containing a parameter the operation doesn't declare (e.g. `?foo=bar`)
+      is not rejected — the extra parameter is silently ignored (tolerant
+      reader). This is deliberate, not an oversight: it matches the native
+      default behavior of both target frameworks, and unlike request
+      bodies, query strings have no `additionalProperties: false`-style
+      closed-schema mechanism in OpenAPI 3.0 to enforce otherwise.
+    - **Datetime output is always UTC, `Z`-suffixed.** Every `date-time`
+      field (`createdAt`, `completedAt`) is serialized as RFC 3339 UTC with
+      a literal `Z` suffix (e.g. `2024-01-01T10:00:00Z`) — an explicit
+      numeric offset (e.g. `-03:00`) is never emitted. This is part of the
+      contract, not left to each stack's framework/timezone defaults
+      (Quarkus/Jackson vs. Rails' `ActiveSupport::TimeWithZone`, which
+      differ here out of the box), and is covered by contract tests.
+    - **Trailing slash is not part of the contract.** Canonical paths have
+      no trailing slash (e.g. `/projetos`, never `/projetos/`). Requests to
+      a non-canonical form are outside the contract: behavior is
+      unspecified and excluded from conformance testing.
+    - **Business rule violations are always `422`**, never `400`. `400` is
+      reserved for malformed/invalid *requests* (schema violations); `422` is
+      reserved for well-formed requests that violate a domain invariant.
+    - **Naming convention.** All component names — `schemas`, `parameters`,
+      `responses`, and `examples` alike — are English (`Project`, `Task`,
+      `CreateTaskRequest`, `ProjectIdParam`, `ProjectNotFound`,
+      `ArchiveBlockedByInProgressTask`, ...), and so is every operation's
+      `operationId` (`createProject`, `listTasks`, ...). URL paths stay in
+      Portuguese (`/projetos`, `/tarefas`), matching this domain's
+      stakeholder language — schema/parameter/operationId naming and URL
+      naming are independent axes. Reusable `components.examples` keys are
+      PascalCase; the key used at each point of reference (inside a
+      response's inline `examples:` map) is camelCase. `title`/`detail` text
+      inside `ProblemDetails` example payloads is written in Portuguese,
+      since that's the language real API consumers of this domain would see.
+    - **No authentication.** This API defines no security scheme;
+      authentication/authorization is deliberately out of scope for this
+      challenge.
+
+    ## Business rules (422 unless noted)
+    1. A project cannot be archived while it has a task `in_progress`.
+    2. Only tasks with status `pending` can be deleted.
+    3. `completedAt` is never accepted as input — it is set internally when a
+       task transitions to `done`. Submitting it is a malformed request
+       (`400`), not a business rule violation.
+    4. A project that is `archived` does not accept new tasks.
+    5. Task status is forward-only and strictly sequential:
+       `pending -> in_progress -> done`. Any backward move or skip-ahead
+       (e.g. `pending -> done` directly) is rejected.
+    6. A task belonging to an `archived` project cannot change `status`; all
+       other patchable fields (`title`, `description`, `priority`) remain
+       editable. Resubmitting the current `status` is a no-op, not a change
+       — see the same-state-PATCH decision above. This rule is checked
+       before rule 5 — see the validation-precedence decision above: a
+       status-change attempt on a task whose project is archived always
+       returns rule 6's error, even if the requested transition would also
+       violate rule 5's forward-only sequencing.
+
+  contact:
+    name: TaskFlow
+    url: https://taskflow.dev
+
+servers:
+  - url: http://localhost:8080
+    description: Quarkus implementation (local dev)
+  - url: http://localhost:3000
+    description: Rails implementation (local dev)
+  # Production URLs added post-deploy.
+
+tags:
+  - name: Projetos
+    description: Project management
+  - name: Tarefas
+    description: Task management
+
+paths:
+  /projetos:
+    post:
+      tags: [Projetos]
+      summary: Create a project
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: Project created
+          headers:
+            Location:
+              required: true
+              description: |
+                URL of the newly created project, relative to the API's base
+                path.
+              schema:
+                type: string
+                format: uri-reference
+                example: /projetos/3fa85f64-5717-4562-b3fc-2c963f66afa6
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/ProjectBodyBadRequest"
+
+    get:
+      tags: [Projetos]
+      summary: List projects
+      operationId: listProjects
+      description: |
+        Returns every project matching the optional `status` filter,
+        ordered by `createdAt` ascending, `id` ascending as tie-breaker.
+        No pagination — see the API-level scope note in `info.description`.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter projects by status
+          schema:
+            $ref: "#/components/schemas/ProjectStatus"
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/ProjectStatusFilterBadRequest"
+
+  /projetos/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectIdParam"
+
+    get:
+      tags: [Projetos]
+      summary: Get a project by id
+      operationId: getProject
+      responses:
+        "200":
+          description: Project found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/PathParamBadRequest"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+
+    patch:
+      tags: [Projetos]
+      summary: Partially update a project
+      operationId: updateProject
+      description: |
+        Patchable fields: `name`, `description`, `status`.
+
+        Setting `status` to `archived` triggers business rule #1 below if the
+        project still has a task `in_progress`. Resubmitting the project's
+        current `status` is a no-op for that field only (`200`), not a
+        transition; any other field submitted in the same request (e.g.
+        `name`) still applies normally.
+
+        A malformed path `id` is checked before the body — see the
+        `400`-stage sub-order in `info.description`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/ProjectPatchBodyBadRequest"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "422":
+          description: Business rule violation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+              examples:
+                archiveBlockedByInProgressTask:
+                  $ref: "#/components/examples/ArchiveBlockedByInProgressTask"
+
+  /projetos/{id}/tarefas:
+    parameters:
+      - $ref: "#/components/parameters/ProjectIdParam"
+
+    post:
+      tags: [Tarefas]
+      summary: Create a task within a project
+      operationId: createTask
+      description: |
+        Creating a task in a project whose `status` is `archived` triggers
+        business rule #4 below.
+
+        A malformed path `id` (the project's) is checked before the body —
+        see the `400`-stage sub-order in `info.description`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
+      responses:
+        "201":
+          description: Task created
+          headers:
+            Location:
+              required: true
+              description: |
+                URL of the newly created task, relative to the API's base
+                path.
+              schema:
+                type: string
+                format: uri-reference
+                example: /tarefas/9c858901-8a57-4791-81fe-4c455b099bc9
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/TaskCreateBodyBadRequest"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+        "422":
+          description: Business rule violation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+              examples:
+                taskCreateInArchivedProject:
+                  $ref: "#/components/examples/TaskCreateInArchivedProject"
+
+    get:
+      tags: [Tarefas]
+      summary: List tasks of a project
+      operationId: listTasks
+      description: |
+        Returns every task of the project matching the optional `status` and
+        `priority` filters, ordered by `createdAt` ascending, `id` ascending
+        as tie-breaker. When both filters are provided, a task must match
+        both (AND semantics) to be included. No pagination — see the
+        API-level scope note in `info.description`.
+
+        A malformed path `id` is checked before the query parameters — see
+        the `400`-stage sub-order in `info.description`.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter tasks by status
+          schema:
+            $ref: "#/components/schemas/TaskStatus"
+        - name: priority
+          in: query
+          required: false
+          description: Filter tasks by priority
+          schema:
+            $ref: "#/components/schemas/TaskPriority"
+      responses:
+        "200":
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/TaskFiltersBadRequest"
+        "404":
+          $ref: "#/components/responses/ProjectNotFound"
+
+  /tarefas/{id}:
+    parameters:
+      - $ref: "#/components/parameters/TaskIdParam"
+
+    get:
+      tags: [Tarefas]
+      summary: Get a task by id
+      operationId: getTask
+      responses:
+        "200":
+          description: Task found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/PathParamBadRequest"
+        "404":
+          $ref: "#/components/responses/TaskNotFound"
+
+    patch:
+      tags: [Tarefas]
+      summary: Partially update a task
+      operationId: updateTask
+      description: |
+        Patchable fields: `title`, `description`, `status`, `priority`.
+
+        - Changing `status` is forward-only and strictly sequential —
+          `pending -> in_progress -> done`, one step at a time. Any backward
+          move or skip-ahead (e.g. `pending -> done` directly) triggers
+          business rule #5 — unless the task's project is archived, in
+          which case business rule #6 applies instead (see below).
+          Resubmitting the task's current `status` is a no-op for that
+          field only (`200`), not a transition; other fields submitted
+          alongside it (e.g. `title`) still apply normally.
+        - If the task's project is `archived`, `status` cannot be changed at
+          all (business rule #6) — `title`, `description`, and `priority`
+          edits are still allowed. This check runs *before* rule #5 (see
+          the validation-precedence decision above): any attempted status
+          change on a task whose project is archived returns rule #6's
+          error, regardless of whether the target status would also
+          violate rule #5's forward-only sequencing. Resubmitting the
+          current `status` is still a no-op for that field (`200`), never
+          a business rule violation, even when the project is archived —
+          this holds regardless of other fields submitted in the same
+          request; see the same-state-PATCH decision above.
+        - `completedAt` is never accepted as input — it is assigned
+          internally when a task transitions to `done`. Submitting it is a
+          malformed request (see the `400` response below), not a business
+          rule violation.
+
+        A malformed path `id` is checked before the body — see the
+        `400`-stage sub-order in `info.description`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/TaskPatchBodyBadRequest"
+        "404":
+          $ref: "#/components/responses/TaskNotFound"
+        "422":
+          description: Business rule violation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+              examples:
+                taskStatusRegression:
+                  $ref: "#/components/examples/TaskStatusRegression"
+                taskStatusChangeBlockedArchivedProject:
+                  $ref: "#/components/examples/TaskStatusChangeBlockedArchivedProject"
+
+    delete:
+      tags: [Tarefas]
+      summary: Delete a task
+      operationId: deleteTask
+      description: Only tasks with status `pending` may be deleted (business rule #2).
+      responses:
+        "204":
+          description: Task deleted
+        "400":
+          $ref: "#/components/responses/PathParamBadRequest"
+        "404":
+          $ref: "#/components/responses/TaskNotFound"
+        "422":
+          description: Business rule violation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+              examples:
+                taskDeleteNotPending:
+                  $ref: "#/components/examples/TaskDeleteNotPending"
+
+components:
+  parameters:
+    ProjectIdParam:
+      name: id
+      in: path
+      required: true
+      description: Project id
+      schema:
+        type: string
+        format: uuid
+
+    TaskIdParam:
+      name: id
+      in: path
+      required: true
+      description: Task id
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    PathParamBadRequest:
+      description: The `id` path parameter is not a valid UUID.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          examples:
+            invalidUuidPathParameter:
+              $ref: "#/components/examples/InvalidUuidPathParameter"
+
+    ProjectBodyBadRequest:
+      description: |
+        Malformed project creation body — missing or invalid `name`, or a
+        field not accepted on create (e.g. `status`). Examples below are
+        illustrative, not exhaustive — any schema violation (missing,
+        invalid, oversized, unknown, or `readOnly` field) yields this same
+        response shape.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ValidationProblemDetails"
+          examples:
+            projectNameInvalid:
+              $ref: "#/components/examples/ProjectNameInvalid"
+            projectStatusSubmittedOnCreate:
+              $ref: "#/components/examples/ProjectStatusSubmittedOnCreate"
+
+    ProjectPatchBodyBadRequest:
+      description: |
+        Malformed request for `PATCH /projetos/{id}`: invalid path
+        parameter, invalid `name`, or an empty `{}` body. Examples below are
+        illustrative, not exhaustive — any schema violation (missing,
+        invalid, oversized, out-of-enum, unknown, or `readOnly` field)
+        yields this same response shape.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ValidationProblemDetails"
+          examples:
+            invalidPathParameterFieldError:
+              $ref: "#/components/examples/InvalidPathParameterFieldError"
+            projectNameInvalid:
+              $ref: "#/components/examples/ProjectNameInvalid"
+            emptyPatchBody:
+              $ref: "#/components/examples/EmptyPatchBody"
+
+    TaskCreateBodyBadRequest:
+      description: |
+        Malformed request for `POST /projetos/{id}/tarefas`: invalid path
+        parameter, invalid `title`, missing `priority`, or an out-of-enum
+        `priority` value. Examples below are illustrative, not exhaustive —
+        any schema violation (missing, invalid, oversized, out-of-enum,
+        unknown, or `readOnly` field) yields this same response shape.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ValidationProblemDetails"
+          examples:
+            invalidPathParameterFieldError:
+              $ref: "#/components/examples/InvalidPathParameterFieldError"
+            taskTitleInvalid:
+              $ref: "#/components/examples/TaskTitleInvalid"
+            taskPriorityMissing:
+              $ref: "#/components/examples/TaskPriorityMissing"
+            taskPriorityInvalid:
+              $ref: "#/components/examples/TaskPriorityInvalid"
+
+    TaskPatchBodyBadRequest:
+      description: |
+        Malformed request for `PATCH /tarefas/{id}`: invalid path parameter,
+        invalid `title`, a manually-submitted `completedAt`, or an empty
+        `{}` body. Examples below are illustrative, not exhaustive — any
+        schema violation (missing, invalid, oversized, out-of-enum,
+        unknown, or `readOnly` field) yields this same response shape.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ValidationProblemDetails"
+          examples:
+            invalidPathParameterFieldError:
+              $ref: "#/components/examples/InvalidPathParameterFieldError"
+            taskTitleInvalid:
+              $ref: "#/components/examples/TaskTitleInvalid"
+            completedAtSubmitted:
+              $ref: "#/components/examples/CompletedAtSubmitted"
+            emptyPatchBody:
+              $ref: "#/components/examples/EmptyPatchBody"
+
+    ProjectStatusFilterBadRequest:
+      description: |
+        Malformed request for `GET /projetos`: the `status` query filter is
+        outside the project status enum.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          examples:
+            projectStatusFilterInvalid:
+              $ref: "#/components/examples/ProjectStatusFilterInvalid"
+
+    TaskFiltersBadRequest:
+      description: |
+        Malformed request for `GET /projetos/{id}/tarefas`: invalid path
+        parameter, or the `status`/`priority` query filter is outside its
+        enum.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          examples:
+            invalidUuidPathParameter:
+              $ref: "#/components/examples/InvalidUuidPathParameter"
+            taskStatusFilterInvalid:
+              $ref: "#/components/examples/TaskStatusFilterInvalid"
+            taskPriorityFilterInvalid:
+              $ref: "#/components/examples/TaskPriorityFilterInvalid"
+
+    ProjectNotFound:
+      description: Project not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          examples:
+            projectNotFound:
+              $ref: "#/components/examples/ProjectNotFound"
+
+    TaskNotFound:
+      description: Task not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          examples:
+            taskNotFound:
+              $ref: "#/components/examples/TaskNotFound"
+
+  schemas:
+    ProjectStatus:
+      type: string
+      enum: [active, archived]
+
+    TaskStatus:
+      type: string
+      enum: [pending, in_progress, done]
+
+    TaskPriority:
+      type: string
+      enum: [low, medium, high]
+
+    Project:
+      type: object
+      description: |
+        Full project representation, as returned by the API. This response
+        shape is distinct from the request shapes below — it includes
+        server-assigned fields (`id`, `createdAt`) that clients never send.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          $ref: "#/components/schemas/ProjectStatus"
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            UTC, `Z`-suffixed (RFC 3339, e.g. `2024-01-01T10:00:00Z`).
+            Offsets are never emitted — see the datetime scope decision.
+      required: [id, name, status, createdAt]
+
+    CreateProjectRequest:
+      type: object
+      description: |
+        Request body for `POST /projetos`. `status` is not accepted on
+        create; every new project starts as `active`.
+        `additionalProperties: false` means submitting `status`, `id`, or
+        `createdAt` here is rejected with `400`.
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+      required: [name]
+
+    UpdateProjectRequest:
+      type: object
+      description: |
+        Request body for `PATCH /projetos/{id}`. Patchable fields only:
+        `name`, `description`, `status`. `id` and `createdAt` are `readOnly`
+        and any other field is unknown — both are rejected with `400`
+        because of `additionalProperties: false`.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          $ref: "#/components/schemas/ProjectStatus"
+
+    Task:
+      type: object
+      description: |
+        Full task representation, as returned by the API. This response
+        shape is distinct from the request shapes below — it includes
+        server-assigned fields (`id`, `createdAt`, `completedAt`,
+        `projectId`) that clients never send.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        priority:
+          $ref: "#/components/schemas/TaskPriority"
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            UTC, `Z`-suffixed (RFC 3339, e.g. `2024-01-01T10:00:00Z`).
+            Offsets are never emitted — see the datetime scope decision.
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            UTC, `Z`-suffixed (RFC 3339, e.g. `2024-01-01T10:00:00Z`).
+            Offsets are never emitted — see the datetime scope decision.
+        projectId:
+          type: string
+          format: uuid
+          readOnly: true
+      required: [id, title, status, priority, createdAt, projectId]
+
+    CreateTaskRequest:
+      type: object
+      description: |
+        Request body for `POST /projetos/{id}/tarefas`. `status` is not
+        accepted on create; every new task starts as `pending`.
+        `additionalProperties: false` means submitting `status`,
+        `completedAt`, `id`, `createdAt`, or `projectId` here is rejected
+        with `400`. `priority` is required — there is no implicit default.
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        priority:
+          $ref: "#/components/schemas/TaskPriority"
+      required: [title, priority]
+
+    UpdateTaskRequest:
+      type: object
+      description: |
+        Request body for `PATCH /tarefas/{id}`. Patchable fields only:
+        `title`, `description`, `status`, `priority`.
+
+        `completedAt` is intentionally excluded from this schema — it is
+        `readOnly`, set internally by the domain when a task completes
+        (business rule #3). Decision: submitting it is treated the same as
+        any other unknown/readOnly field. Because of `additionalProperties:
+        false`, it fails schema validation and is rejected with `400`, not
+        `422` — it is a malformed request, not a business rule violation.
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        priority:
+          $ref: "#/components/schemas/TaskPriority"
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs.
+      properties:
+        type:
+          type: string
+          format: uri
+          description: |
+            A stable URI identifying the specific problem type. It is an
+            identifier, not necessarily a dereferenceable link.
+        title:
+          type: string
+          description: Short, human-readable summary of the problem type.
+        status:
+          type: integer
+          description: HTTP status code repeated for convenience.
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence.
+        instance:
+          type: string
+          format: uri-reference
+          description: |
+            URI reference identifying this specific occurrence of the
+            problem — typically the relative request path.
+      required: [type, title, status]
+
+    ValidationProblemDetails:
+      description: RFC 7807 Problem Details, extended with a per-field error list.
+      allOf:
+        - $ref: "#/components/schemas/ProblemDetails"
+        - type: object
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                    description: Name of the offending field.
+                  message:
+                    type: string
+                    description: Why the field is invalid.
+                required: [field, message]
+          required: [errors]
+
+  examples:
+    ProjectNotFound:
+      summary: Projeto não encontrado
+      value:
+        type: https://taskflow.dev/errors/resource-not-found
+        title: Recurso não encontrado
+        status: 404
+        detail: Nenhum projeto encontrado com id 3fa85f64-5717-4562-b3fc-2c963f66afa6
+
+    TaskNotFound:
+      summary: Tarefa não encontrada
+      value:
+        type: https://taskflow.dev/errors/resource-not-found
+        title: Recurso não encontrado
+        status: 404
+        detail: Nenhuma tarefa encontrada com id 9c858901-8a57-4791-81fe-4c455b099bc9
+
+    ArchiveBlockedByInProgressTask:
+      summary: Regra de negócio 1 — arquivamento bloqueado por tarefa em andamento
+      value:
+        type: https://taskflow.dev/errors/project-archive-blocked
+        title: Projeto não pode ser arquivado
+        status: 422
+        detail: O projeto possui ao menos uma tarefa com status in_progress.
+        instance: /projetos/3fa85f64-5717-4562-b3fc-2c963f66afa6
+
+    TaskDeleteNotPending:
+      summary: Regra de negócio 2 — exclusão de tarefa que não está pending
+      value:
+        type: https://taskflow.dev/errors/task-delete-not-pending
+        title: Tarefa não pode ser excluída
+        status: 422
+        detail: Apenas tarefas com status pending podem ser excluídas; esta tarefa está in_progress.
+        instance: /tarefas/9c858901-8a57-4791-81fe-4c455b099bc9
+
+    TaskCreateInArchivedProject:
+      summary: Regra de negócio 4 — criação de tarefa em projeto arquivado
+      value:
+        type: https://taskflow.dev/errors/task-create-project-archived
+        title: Não é possível criar tarefa em projeto arquivado
+        status: 422
+        detail: O projeto 3fa85f64-5717-4562-b3fc-2c963f66afa6 está arquivado e não aceita novas tarefas.
+        instance: /projetos/3fa85f64-5717-4562-b3fc-2c963f66afa6/tarefas
+
+    TaskStatusRegression:
+      summary: Regra de negócio 5 — transição de status inválida (retrocesso ou pular etapa)
+      value:
+        type: https://taskflow.dev/errors/task-status-regression
+        title: Transição de status inválida
+        status: 422
+        detail: A transição de status só pode avançar um passo por vez (pending -> in_progress -> done); não é permitido retroceder nem pular etapas.
+        instance: /tarefas/9c858901-8a57-4791-81fe-4c455b099bc9
+
+    TaskStatusChangeBlockedArchivedProject:
+      summary: Regra de negócio 6 — mudança de status bloqueada em tarefa de projeto arquivado
+      value:
+        type: https://taskflow.dev/errors/task-status-change-project-archived
+        title: Não é possível alterar o status de tarefa em projeto arquivado
+        status: 422
+        detail: O status desta tarefa não pode ser alterado enquanto seu projeto estiver arquivado; title, description e priority continuam editáveis.
+        instance: /tarefas/9c858901-8a57-4791-81fe-4c455b099bc9
+
+    ProjectNameInvalid:
+      summary: Campo obrigatório ausente ou inválido (name)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: Um ou mais campos do projeto são inválidos.
+        errors:
+          - field: name
+            message: não pode estar em branco e deve ter no máximo 100 caracteres
+
+    ProjectStatusSubmittedOnCreate:
+      summary: Campo não aceito na criação (status)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: O corpo da requisição contém um campo desconhecido ou não aceito na criação.
+        errors:
+          - field: status
+            message: campo não aceito na criação; todo projeto novo inicia como active
+
+    TaskTitleInvalid:
+      summary: Campo obrigatório ausente ou inválido (title)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: Um ou mais campos da tarefa são inválidos.
+        errors:
+          - field: title
+            message: não pode estar em branco e deve ter no máximo 200 caracteres
+
+    TaskPriorityMissing:
+      summary: Campo obrigatório ausente (priority)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: Um ou mais campos da tarefa são inválidos.
+        errors:
+          - field: priority
+            message: "é obrigatório e deve ser um dos valores: low, medium, high"
+
+    TaskPriorityInvalid:
+      summary: Valor de enum inválido (priority)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: Um ou mais campos da tarefa são inválidos.
+        errors:
+          - field: priority
+            message: "deve ser um dos valores: low, medium, high"
+
+    CompletedAtSubmitted:
+      summary: Campo somente leitura enviado (completedAt)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: O corpo da requisição contém um campo desconhecido ou somente leitura.
+        errors:
+          - field: completedAt
+            message: campo somente leitura; não pode ser definido pelo client
+
+    EmptyPatchBody:
+      summary: Corpo do PATCH vazio
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: O corpo do PATCH não pode ser vazio; inclua ao menos um campo patchable.
+        errors:
+          - field: body
+            message: deve conter ao menos uma propriedade patchable
+
+    InvalidUuidPathParameter:
+      summary: Identificador malformado no path
+      value:
+        type: https://taskflow.dev/errors/invalid-path-parameter
+        title: Parâmetro de path inválido
+        status: 400
+        detail: O identificador informado não é um UUID válido.
+
+    InvalidPathParameterFieldError:
+      summary: Identificador malformado no path (reportado como errors[])
+      value:
+        type: https://taskflow.dev/errors/invalid-path-parameter
+        title: Parâmetro de path inválido
+        status: 400
+        detail: O identificador informado não é um UUID válido.
+        errors:
+          - field: id
+            message: deve ser um UUID válido
+
+    ProjectStatusFilterInvalid:
+      summary: Valor de filtro status (projeto) inválido
+      value:
+        type: https://taskflow.dev/errors/invalid-query-parameter
+        title: Parâmetro de query inválido
+        status: 400
+        detail: "O parâmetro status deve ser um dos valores: active, archived."
+
+    TaskStatusFilterInvalid:
+      summary: Valor de filtro status (tarefa) inválido
+      value:
+        type: https://taskflow.dev/errors/invalid-query-parameter
+        title: Parâmetro de query inválido
+        status: 400
+        detail: "O parâmetro status deve ser um dos valores: pending, in_progress, done."
+
+    TaskPriorityFilterInvalid:
+      summary: Valor de filtro priority inválido
+      value:
+        type: https://taskflow.dev/errors/invalid-query-parameter
+        title: Parâmetro de query inválido
+        status: 400
+        detail: "O parâmetro priority deve ser um dos valores: low, medium, high."

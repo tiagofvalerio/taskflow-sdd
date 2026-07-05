@@ -20,9 +20,13 @@
 - Invariants enforced in the model/domain layer:
   1. Project can only be archived if no task is in_progress (422)
   2. Only pending tasks can be deleted (422)
-  3. Task status is forward-only: pending → in_progress → done (422 on regression)
-  4. completedAt is set internally by Task#complete — never accepted as input
-  5. No new tasks in archived projects (422)
+  3. completedAt is set internally by Task#complete — never accepted as input
+     (400, not 422 — malformed request, not a business rule violation)
+  4. No new tasks in archived projects (422)
+  5. Task status is forward-only and strictly sequential: pending → in_progress
+     → done, one step at a time — no regression, no skipping steps (422)
+  6. Task status cannot change while its project is archived; all other
+     patchable fields (title, description, priority) remain editable (422)
 
 ## Stacks
 - `quarkus-impl/`: Java 25, Quarkus 3.x, JPA/Panache only in adapters, JUnit 5,
