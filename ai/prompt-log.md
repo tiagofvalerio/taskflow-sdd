@@ -808,3 +808,16 @@ rejected alternative, name the alternative and why it lost.
 **2026-07-05 11:34**
 
 git add .
+
+---
+**2026-07-05 11:37**
+
+In quarkus-impl/, scaffold a Quarkus 3.x project (Maven) targeting Java 25.
+First check: what is the latest stable Quarkus version and does it support
+Java 25 as runtime/compile target? Tell me before generating; if 25 is not
+supported as a release target, propose the highest supported LTS-compatible
+option and wait for my decision.
+Extensions: rest-jackson, hibernate-orm-panache, jdbc-postgresql,
+hibernate-validator, smallrye-openapi. Test deps: rest-assured, junit5,
+testcontainers postgresql. No domain code yet. Use context7 mcp server 
+to check documentatios if necessary
