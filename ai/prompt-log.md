@@ -821,3 +821,138 @@ Extensions: rest-jackson, hibernate-orm-panache, jdbc-postgresql,
 hibernate-validator, smallrye-openapi. Test deps: rest-assured, junit5,
 testcontainers postgresql. No domain code yet. Use context7 mcp server 
 to check documentatios if necessary
+
+---
+**2026-07-06 12:08**
+
+/log-ai scaffold do projeto Quarkus — verificação de suporte a Java 25 antes de gerar, extensões para REST/Panache/PostgreSQL/Testcontainers
+
+---
+**2026-07-06 12:10**
+
+Implement ONLY the domain layer in quarkus-impl/src/main/java/.../domain:
+Project and Task entities, TaskStatus/Priority/ProjectStatus as enums or value
+objects, and domain exceptions. Constraints from CLAUDE.md apply: zero framework
+imports, no public setters on invariant fields, all 6 business rules from
+CLAUDE.md/spec as intention-revealing methods (Project.archive(),
+Project.addTask(), Task.startProgress(), Task.complete() setting completedAt
+internally, Task.canBeDeleted(), and the rule-6 guard: no status transition
+while the owning project is archived). Transitions are strictly sequential
+(pending → in_progress → done, no skips), per the spec. Rule precedence from
+the spec applies: the rule-6 state check is evaluated before the rule-5
+transition check.
+
+Before writing any code: propose how Task learns its owning project's archived
+state for the rule-6 check (e.g. transition methods receiving the project or
+its status as a parameter) — rules must stay in the domain, not in services.
+Wait for my
+
+---
+**2026-07-06 12:26**
+
+<task-notification>
+<task-id>a8acbe176e3f55398</task-id>
+<tool-use-id>toolu_01MemXWna8ABGVSJXGNAB3aC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/bc55a1f2-997b-46e2-9383-6a70d005ee60/tasks/a8acbe176e3f55398.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit domain layer purity" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Audit complete. I grepped the entire domain package for framework imports and read every file (7 model classes, 6 exception classes, 2 test classes) plus the relevant spec sections. Verdict: **clean — no blocker or major findings.** All checks pass; a few minor/informational notes below.
+
+## Verified checks
+
+**1. Hexagonal purity — PASS.** Grep for `jakarta|io.quarkus|org.hibernate|com.fasterxml|org.eclipse|javax` across `/Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/main/java/com/taskflow/domain` returned zero matches. Every import is `java.time.*`, `java.util.*`, or intra-domain. Test classes import only JUnit 5, which is permitted in test scope.
+
+**2. No public setters on invariant fields — PASS.** `Project.java`: `id`/`createdAt` are `final` (lines 19, 23); `status` mutates only via `archive()`/`activate()`. `Task.java`: `id`/`projectId`/`createdAt` are `final` (lines 23-24, 29); `status` and `completedAt` mutate only inside `startProgress()`/`complete()`. No `set*` methods exist anywhere in the domain. Both classes are `final` with private constructors.
+
+**3. All 6 business rules present as intention-revealing methods — PASS.**
+- Rule 1: `Project.archive(boolean)` — `Project.java:51-59`, throws `ProjectArchiveBlockedException`
+- Rule 2: `Task.canBeDeleted()` / `ensureCanBeDeleted()` — `Task.java:85-94`, throws `TaskDeleteNotPendingException`
+- Rule 3: `completedAt` assigned only inside `Task.complete()` — `Task.java:81`; no constructor/setter path accepts it except `reconstitute` (persistence-only, documented). Correctly, no domain exception exists for rule 3 (it's a 400 schema concern, per `DomainRuleViolationException.java:6-8`)
+- Rule 4: `Project.addTask()` — `Project.java:70-75`, sole creation path; `Task.create` is package-private (`Task.java:46`)
+- Rule 5: strict one-step transitions — `Task.java:62-82`; pending→done skip blocked by the `!= IN_PROGRESS` check, done is terminal
+- Rule 6: `ensureStatusChangeAllowed(ProjectStatus)` called as the **first** statement of both transition methods (`Task.java:63, 76`) — matches spec precedence (spec/openapi.yaml lines 73-80: rule 6's type URI wins when both are violated). Test `rule6WinsWhenRule5IsAlsoViolated` (`TaskTest.java:119-126`) pins this.
+
+**4. Approved design decisions honored — PASS.** Facts-as-parameters (`ProjectStatus` param, `hasTaskInProgress` boolean), package-private `Task.create`, archive-on-archived is a no-op (`Project.java:52-54`, tested at `ProjectTest.java:84-91`), domain methods strict on same-state (startProgress on IN_PROGRESS throws).
+
+**Spec conformance of value constraints — PASS.** name ≤100 / title ≤200 / description ≤2000 / non-blank match `spec/openapi.yaml` (lines 663-664, 691-696, 734-739, 777-782); enum values align; priority required with no default matches domain's `requireNonNull` and spec line 772.
+
+## Minor / informational findings
+
+1. **[minor] `TaskStatusRegressionException` name is narrower than the rule** — `/Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/main/java/com/taskflow/domain/exception/TaskStatusRegressionException.java:11`. It is also thrown for the pending→done *skip-ahead* (`Task.java:78`), which is not a regression. The javadoc and message ("may only advance one step at a time") are accurate; only the class name misleads. Consider `InvalidTaskStatusTransitionException`.
+
+2. **[minor] `Instant.now()` hardcoded in domain** — `Project.java:37`, `Task.java:49,81`. JDK-pure so no violation, but a `java.time.Clock`/`InstantSource` parameter (still JDK-only) would make `completedAt`/`createdAt` deterministic — relevant since PIT mutation testing on domain+application is planned and the tests currently use before/after time-window assertions (`TaskTest.java:94-99`), which are weaker mutation killers.
+
+3. **[info] Integration obligations for the application/adapter layers** (not defects in this code, but contracts it imposes — flag to the implementer):
+   - Same-state no-op semantics (spec lines 46-52, including the "no-op even when archived" case) must be short-circuited in the application layer *before* calling `startProgress`/`complete`, since the domain throws rule 6 unconditionally on any call with an archived owner.
+   - Domain `IllegalArgumentException`s (`Project.java:112`, `Task.java:154,163`) are fail-fast one-field-at-a-time; the spec requires body-stage 400s to report *all* violating fields in `errors[]` (spec lines 81-89). Syntactic validation must therefore also run on adapter DTOs; domain IAE is defense-in-depth only, and the exception mapper must not blanket-map IAE to 400.
+
+4. **[info] `reconstitute` accepts inconsistent state** — `Task.java:53-59` allows e.g. `DONE` with null `completedAt` or `PENDING` with non-null `completedAt`. Documented as persistence-only and standard for the pattern; DB constraints in the persistence adapter should mirror this invariant when that layer is written.
+
+## Test coverage note
+
+Both test files exercise every rule including the precedence case, no-op archive, exception payloads (IDs/statuses), boundary lengths (100/101, 200/201, 2000/2001), and `reconstitute`. `TaskTest.java:136-147` correctly documents that rule 6's non-status editability is proven structurally (no `ProjectStatus` param on `changeTitle`/`changeDescription`/`changePriority`).
+
+Per project instructions: this was a significant review of newly generated code — remember to run `/log-ai`, and `/revisar` if you act on any of the findings above.</result>
+<usage><subagent_tokens>27885</subagent_tokens><tool_uses>20</tool_uses><duration_ms>116992</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-06 20:32**
+
+Use the domain-guardian agent to audit quarkus-impl.
+
+---
+**2026-07-06 20:34**
+
+<task-notification>
+<task-id>a8acbe176e3f55398</task-id>
+<tool-use-id>toolu_016tuqqAC1dpThVgzMrNq7dd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/bc55a1f2-997b-46e2-9383-6a70d005ee60/tasks/a8acbe176e3f55398.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit domain layer purity" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Widened audit done. Results:
+
+**1. Layer skeleton — CLEAN.** Full tree glob shows `application/`, `adapter/in/rest/`, `adapter/out/persistence/` contain only `.gitkeep`. No implementation code exists beyond the committed domain package and its two test classes. Only other files under `src/` are the four scaffold Dockerfiles in `src/main/docker/`. SDD discipline intact.
+
+**2. pom.xml — mostly consistent, three notes.**
+- `quarkus-hibernate-orm-panache` (`pom.xml:45`) and `quarkus-jdbc-postgresql` (`pom.xml:61`) are already on the classpath with zero JPA entities. Not a violation per your "positioned for adapters" allowance, but note Maven cannot scope a dependency to a package — domain purity is currently enforced only by grep/convention. **[minor] No ArchUnit (or similar) test dependency exists to mechanically enforce the zero-framework-imports rule**; recommended before adapters land, since the classpath now makes accidental `jakarta.persistence` imports in domain compile successfully.
+- Test deps match CLAUDE.md: `quarkus-junit` (JUnit 5) `pom.xml:69`, `rest-assured` `pom.xml:74`, `testcontainers-postgresql` + `testcontainers-junit-jupiter` under the Testcontainers 2.0.5 BOM (`pom.xml:20,26-31,79,84`) — consistent with the Quarkus 3.37/Testcontainers 2.x artifact-ID note in project memory.
+- **[minor] PIT missing entirely**: no `pitest-maven` plugin, no `pitest-junit5-plugin`, no targetClasses config for domain+application. Expected at this stage but required by CLAUDE.md before the mutation-testing deliverable.
+
+**3. application.properties — CLEAN.** Two lines only: `db-kind=postgresql` (Dev Services, deliberately no URL) and OpenAPI title. No `quarkus.hibernate-orm.database.generation` or any schema-generation setting against the entity-less domain. Hibernate ORM will merely log its "no entities" notice at startup — no contradiction. File: `/Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/main/resources/application.properties`.
+
+**4. Stray sources — NONE.** Every `.java` file under `quarkus-impl/` sits in `com.taskflow.domain.{model,exception}` (main) or its mirror (test). No generated `GreetingResource`/leftover scaffold classes.
+
+**5. Domain purity re-grep — STILL CLEAN.** `import (jakarta|io.quarkus|org.hibernate|com.fasterxml|org.eclipse|javax)` across `quarkus-impl/src/main/java`: zero matches (commit a1e6e5d unchanged).
+
+**Summary:** no violations. Two minor forward-looking gaps: add ArchUnit purity tests before adapter work begins, and the PIT setup is still absent. Prior domain-layer findings from my first pass stand unchanged.</result>
+<usage><subagent_tokens>36031</subagent_tokens><tool_uses>4</tool_uses><duration_ms>44293</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-06 20:37**
+
+Yes — add ArchUnit now, before adapter work: dependency (test scope) plus an
+architecture test class enforcing: (1) no class in ..domain.. may depend on
+jakarta.*, io.quarkus.*, org.hibernate.*, com.fasterxml.* or any
+..adapter../..application.. package; (2) same restriction for ..application..
+once it exists, plus: application may depend on domain, never on adapters.
+Wire it to run in the normal test phase. PIT stays deferred to the mutation-
+testing step as planned.
+
+---
+**2026-07-06 20:42**
+
+/revisar findings do domain-guardian na camada de domínio: auditoria limpa, com duas lacunas prospectivas apontadas pelo próprio agente — pureza do domínio dependia só de grep/convenção com jakarta.persistence já no classpath; aceito: ArchUnit adicionado ANTES da fase de adapters, transformando a regra arquitetural em quebra de build. PIT corretamente adiado para a etapa de mutação. Lição: o agente revisor também propõe melhorias estruturais, e a decisão de timing continua humana.
+
+---
+**2026-07-06 20:43**
+
+/log-ai camada de domínio Quarkus — 6 regras como métodos de intenção, testes primeiro, decisões via plan mode (fatos como parâmetros, ids tipados)
+
+---
+**2026-07-06 20:44**
+
+/log-ai ArchUnit como enforcement de pureza hexagonal no build

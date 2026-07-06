@@ -545,3 +545,147 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    e o usuário confirmou explicitamente que a revisão dele foi só de
    leitura ("ok to begin development") — sem correção a registrar, por isso
    nenhuma entrada nova foi criada em `ai/revisoes.md` para esta tarefa.
+
+---
+
+## 11. Scaffold do projeto Quarkus (`quarkus-impl/`)
+
+1. **Contexto** — Início da fase de implementação Quarkus. Scaffold do
+   projeto Maven em `quarkus-impl/`, sem nenhum código de domínio (SDD:
+   spec congelada continua sendo a única fonte de verdade).
+
+2. **Prompt (resumo)** — Pedido pra criar scaffold Quarkus 3.x (Maven)
+   com alvo Java 25, mas **antes de gerar**: verificar qual é a última
+   versão estável do Quarkus e se ela suporta Java 25 como alvo de
+   compilação/runtime; se não suportasse, propor a maior opção
+   LTS-compatível e aguardar decisão. Extensões pedidas: `rest-jackson`,
+   `hibernate-orm-panache`, `jdbc-postgresql`, `hibernate-validator`,
+   `smallrye-openapi`. Deps de teste: REST Assured, JUnit 5,
+   Testcontainers PostgreSQL. Sem código de domínio.
+
+3. **O que a IA produziu** —
+   - Pesquisou antes de gerar (condição do prompt): Java 25 tem suporte
+     pleno no Quarkus atual; última estável na pesquisa = 3.36.3, LTS =
+     3.33.2.1. Usuário escolheu 3.36.3 (via pergunta estruturada) e também
+     escolheu instalar JDK 25 real (`brew install openjdk@25`), já que a
+     máquina só tinha JDK 21 e 26.
+   - Instalou JDK 25 e registrou via symlink em nível de usuário
+     (`~/Library/Java/JavaVirtualMachines/`), sem sudo.
+   - Gerou o projeto com `quarkus-maven-plugin:create -DnoCode
+     -DjavaVersion=25` — o registry do gerador resolveu a plataforma pra
+     **3.37.1** (mais nova que a pesquisa indicava; mantida por ser a
+     estável mais recente, desvio informado ao usuário).
+   - `pom.xml`: `com.taskflow:quarkus-impl`, `maven.compiler.release=25`,
+     packaging `quarkus` (estilo novo), artefato de teste `quarkus-junit`
+     (novo no 3.37), REST Assured e Testcontainers adicionados à mão.
+   - Esqueleto hexagonal só com pacotes + `.gitkeep`: `domain/`,
+     `application/`, `adapter/in/rest/`, `adapter/out/persistence/`.
+   - `application.properties` mínimo: `db-kind=postgresql` (Dev Services)
+     e título do OpenAPI.
+   - **Problema encontrado e corrigido no caminho**: Testcontainers 1.21.x
+     (plano original) quebrou o dev mode com `ClassNotFoundException:
+     org.junit.rules.TestRule` — a plataforma Quarkus 3.37 migrou pra
+     Testcontainers **2.x** (artifact IDs novos, sem JUnit 4). Corrigido
+     usando `testcontainers-postgresql` e `testcontainers-junit-jupiter`
+     2.0.5, alinhados à plataforma.
+   - Verificação: `./mvnw verify` BUILD SUCCESS em JDK 25; `quarkus:dev`
+     subiu Dev Services com `postgres:18`, `/q/openapi` servindo OpenAPI
+     3.1 e dev-ui respondendo 200.
+
+4. **Resultado** — Aceito com ajustes feitos durante a própria sessão
+   (não houve edição manual do usuário): versão da plataforma 3.37.1 em
+   vez de 3.36.3 aprovada no plano, e Testcontainers 2.x em vez de 1.x.
+   Desvios registrados em `ai/revisoes.md` (entrada correspondente à
+   sessão de scaffold). Nada commitado ainda.
+
+## 12. Camada de domínio Quarkus — 6 regras como métodos de intenção
+
+1. **Contexto** — Primeira camada real da implementação Quarkus
+   (pós-scaffold): domínio hexagonal puro em
+   `quarkus-impl/src/main/java/com/taskflow/domain/`, e nada além dele.
+   Commit `a1e6e5d`.
+
+2. **Prompt (resumo)** — Implementar SOMENTE a camada de domínio:
+   entidades `Project`/`Task`, enums de status/prioridade, exceções de
+   domínio. Restrições explícitas: zero imports de framework, sem
+   setters públicos em campos de invariante, as 6 regras do
+   `CLAUDE.md`/spec como métodos que revelam intenção
+   (`Project.archive()`, `Project.addTask()`, `Task.startProgress()`,
+   `Task.complete()` setando `completedAt` internamente,
+   `Task.canBeDeleted()`, guarda da regra 6), transições estritamente
+   sequenciais e precedência regra 6 antes da regra 5. Condição de
+   processo: **antes de escrever código**, propor como `Task` conhece o
+   estado arquivado do projeto dono (regra 6) e aguardar aprovação —
+   regra no domínio, nunca em service. Rodou em plan mode.
+
+3. **O que a IA produziu** —
+   - Leu spec congelada + `docs/decisoes.md`, apresentou 3 desenhos via
+     pergunta estruturada: fatos como parâmetros (recomendado), passar
+     `Project` inteiro, ou aggregate root com coleção bidirecional.
+     Decisões do usuário: **fatos como parâmetros**
+     (`task.startProgress(ProjectStatus)`,
+     `project.archive(hasTaskInProgress)`), **ids tipados** (records
+     `ProjectId`/`TaskId`) e **testes junto** no mesmo passo.
+   - 7 classes de modelo + 6 exceções (`DomainRuleViolationException`
+     sealed, subclasses espelhando 1:1 as chaves de exemplo da spec,
+     pra mapeamento mecânico exceção → `type` URI no futuro adapter).
+     Regra 3 sem exceção própria — é 400/schema, problema do adapter.
+     Criação de `Task` só via `Project.addTask` (factory
+     package-private). `reconstitute(...)` público pros adapters de
+     persistência, sem checagem de regra.
+   - 28 testes JUnit 5 puros (sem Quarkus, sem containers), incluindo o
+     caso de precedência (tarefa `pending` + projeto arquivado +
+     `complete()` viola 5 E 6 → erro da regra 6) e o no-op de arquivar
+     projeto já arquivado.
+   - Erro próprio detectado e corrigido em voo: classe gerada com typo
+     `TaskStatusChangedBlockedException` (não batia com o nome do
+     arquivo nem com o `permits` da sealed) — corrigida antes do
+     primeiro build.
+   - Auditoria pós-geração via subagente `domain-guardian`: limpa em
+     todos os itens obrigatórios; duas lacunas prospectivas viraram a
+     entrada 9 de `ai/revisoes.md` (ArchUnit antecipado com validação
+     por classe-canário; PIT adiado deliberadamente).
+
+4. **Resultado** — Aceito como gerado (typo corrigido pela própria IA
+   antes do build; 28/28 testes verdes com JDK 25). Recomendação
+   estrutural da auditoria aceita com timing arbitrado pelo usuário —
+   ver `ai/revisoes.md`, entrada 9.
+
+## 13. ArchUnit como enforcement de pureza hexagonal no build
+
+1. **Contexto** — Sequência imediata da auditoria do `domain-guardian`
+   sobre a camada de domínio (entrada 12; racional completo na entrada 9
+   de `ai/revisoes.md`): a pureza hexagonal era garantida só por
+   grep/convenção, com Panache e driver JDBC já no classpath de
+   compilação — um `import jakarta.persistence.*` acidental no domínio
+   compilaria sem erro.
+
+2. **Prompt (resumo)** — Pedido pra adicionar ArchUnit AGORA, antes da
+   fase de adapters: dependência em escopo de teste + classe de teste de
+   arquitetura com duas regras — (1) nenhuma classe em `..domain..` pode
+   depender de `jakarta.*`, `io.quarkus.*`, `org.hibernate.*`,
+   `com.fasterxml.*` nem de pacotes `..adapter..`/`..application..`;
+   (2) mesma restrição pra `..application..` quando existir, podendo
+   depender do domínio mas nunca dos adapters. Rodando na fase de teste
+   normal. PIT explicitamente mantido adiado pra etapa de mutação.
+
+3. **O que a IA produziu** —
+   - Consultou o Maven Central antes de fixar versão:
+     `com.tngtech.archunit:archunit-junit5` **1.4.1** (test scope) em
+     `quarkus-impl/pom.xml`.
+   - `src/test/java/com/taskflow/architecture/HexagonalArchitectureTest.java`:
+     `@AnalyzeClasses` sobre `com.taskflow` (sem testes), duas `@ArchTest`
+     rules com os pacotes proibidos compartilhados numa constante;
+     `allowEmptyShould(true)` na regra da aplicação, que ainda é só
+     scaffold com `.gitkeep`.
+   - Validação negativa da regra: classe-canário `PurityCanary` anotada
+     com `@jakarta.persistence.Entity` criada temporariamente dentro do
+     domínio — o build quebrou como esperado; canário e `.class` obsoleto
+     em `target/` removidos em seguida.
+   - Suíte completa verde: 30/30 (28 de domínio + 2 de arquitetura),
+     ambas as regras executando na fase de teste padrão do Maven, sem
+     plugin extra.
+
+4. **Resultado** — Aceito como gerado. Origem da mudança documentada em
+   `ai/revisoes.md`, entrada 9 (recomendação do agente auditor com
+   timing decidido pelo usuário: ArchUnit antecipado, PIT adiado).

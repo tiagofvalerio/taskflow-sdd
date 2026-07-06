@@ -510,3 +510,55 @@ incompleta, e por quê — não é um changelog de features.
    antes de considerar o contrato pronto — são exatamente o tipo de coisa
    que "reler o spec de novo" não vai achar, porque não há nada de errado
    escrito, só uma decisão que nunca foi tomada.
+
+## 9. Auditoria do domain-guardian na camada de domínio Quarkus — pureza garantida só por convenção
+
+1. **Data / Fase** — 2026-07-06, fase de implementação Quarkus (camada de
+   domínio recém-commitada em `a1e6e5d`; auditoria via subagente
+   `domain-guardian`, pedida explicitamente após a geração).
+
+2. **O que a IA sugeriu** — A camada de domínio gerada estava correta em
+   si: zero imports de framework, sem setters públicos em campos de
+   invariante, as 6 regras de negócio como métodos com nome de intenção
+   (`archive(hasTaskInProgress)`, `startProgress(ProjectStatus)`, etc.),
+   precedência regra 6 antes da regra 5 dentro dos métodos de transição.
+   A verificação de pureza, porém, foi feita só com `grep` de imports —
+   um check pontual, executado uma vez, que não protege nenhum commit
+   futuro.
+
+3. **Problema identificado** — A auditoria (limpa em todos os itens
+   obrigatórios) apontou duas lacunas prospectivas que a IA geradora não
+   tinha levantado sozinha: (a) `quarkus-hibernate-orm-panache` e o
+   driver JDBC já estão no classpath de compilação por causa dos futuros
+   adapters — Maven não escopa dependência por pacote, então um
+   `import jakarta.persistence.*` acidental dentro de `..domain..`
+   **compilaria sem erro**; a pureza hexagonal, requisito não-negociável
+   do `CLAUDE.md`, dependia só de grep manual e disciplina; (b) o setup
+   de PIT (mutation testing) ainda não existe no `pom.xml`. A lacuna (a)
+   é o achado relevante: uma regra arquitetural que não quebra o build é
+   uma regra que vai ser violada silenciosamente na primeira sessão de
+   trabalho apressada dentro dos adapters.
+
+4. **Correção aplicada** — Aceita a recomendação (a) com timing
+   antecipado deliberadamente: ArchUnit adicionado **antes** da fase de
+   adapters, não depois — `archunit-junit5` 1.4.1 em escopo de teste e
+   `HexagonalArchitectureTest` com duas regras: domínio não pode
+   depender de `jakarta..`, `io.quarkus..`, `org.hibernate..`,
+   `com.fasterxml..` nem de `..adapter..`/`..application..`; aplicação
+   (quando existir — `allowEmptyShould` até lá) sob a mesma restrição de
+   framework, podendo depender do domínio mas nunca dos adapters. Roda
+   na fase de teste normal do Maven, e a regra foi validada
+   negativamente: uma classe-canário anotada com `@Entity` dentro do
+   domínio quebrou o build como esperado antes de ser removida. A
+   recomendação (b) foi conscientemente adiada: PIT pertence à etapa de
+   mutation testing do plano, não a esta — adotá-lo agora só adicionaria
+   configuração morta.
+
+5. **Lição** — Agente revisor não serve só pra achar erro no que foi
+   escrito: também propõe melhoria estrutural que o gerador não propôs
+   ("a regra existe mas nada a torna executável"). Mas as duas
+   recomendações vieram com o mesmo peso, e foi a decisão humana que
+   separou o timing — uma valia antecipar (barata agora, cara depois do
+   primeiro vazamento), a outra valia adiar (inútil antes da fase a que
+   pertence). Aceitar recomendação de agente em bloco, sem arbitrar
+   timing, teria sido tão ruim quanto ignorá-la.
