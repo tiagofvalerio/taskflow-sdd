@@ -1174,3 +1174,258 @@ Jackson 500 or a generic 400 without ProblemDetails).
 **2026-07-07 02:51**
 
 /log-ai correção do drift de coerção pego pelo /sdd-check — coerção estrita no ObjectMapper global, falha de desserialização mapeada para 400 invalid-request-body com campo nomeado, testes de taxonomia para número-em-string e número-em-enum
+
+---
+**2026-07-07 02:55**
+
+Now the contract-validation layer for quarkus-impl, as its own step:
+
+1. Use the contract-tester agent first to produce the coverage matrix (spec
+   scenario x existing test) — note we have SIX business rules plus the
+   precedence guarantees; the matrix must reflect the frozen spec, not the
+   original five-rule challenge text.
+2. Implement whatever the matrix shows missing, and add OpenAPI schema
+   validation of responses against spec/openapi.yaml — investigate the current
+   state of swagger-request-validator-restassured (Atlassian) for
+   compatibility with our RestAssured/Quarkus versions and tell me what you
+   find before wiring it. Every REST test's responses should validate against
+   the spec document, not only against hand-written assertions.
+
+---
+**2026-07-07 02:56**
+
+<task-notification>
+<task-id>a7e1063ca4cc29665</task-id>
+<tool-use-id>toolu_01JB3NcWF8amhjr9LSp9C4QU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/a7e1063ca4cc29665.output</output-file>
+<status>failed</status>
+<summary>Agent "Coverage matrix spec vs tests" failed: Agent terminated early due to an API error: You've hit your session limit · resets 6:50am (America/Sao_Paulo)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The task is analysis-only, which fits plan mode. Let me read the REST/contract test files.</result>
+</task-notification>
+
+---
+**2026-07-07 09:48**
+
+continue
+
+---
+**2026-07-07 09:51**
+
+<task-notification>
+<task-id>a7e1063ca4cc29665</task-id>
+<tool-use-id>toolu_012SGB5NNq3oDmGPKiZLnnUd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/a7e1063ca4cc29665.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage matrix spec vs tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All reading is done (spec + all four REST contract test files + pom.xml check for schema-validation tooling). Since this is an analysis-only task, here is the full coverage matrix.
+
+# Contract-test coverage matrix — quarkus-impl vs spec/openapi.yaml (frozen)
+
+Test files considered (REST/contract layer only):
+- /Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/test/java/com/taskflow/adapter/in/rest/ProjectResourceTest.java (PR)
+- /Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/test/java/com/taskflow/adapter/in/rest/ProjectTasksResourceTest.java (PTR)
+- /Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/test/java/com/taskflow/adapter/in/rest/TaskResourceTest.java (TR)
+- /Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/test/java/com/taskflow/adapter/in/rest/ErrorTaxonomyTest.java (ET)
+
+## POST /projetos (createProject)
+
+| # | Scenario (spec) | Expected | Coverage |
+|---|---|---|---|
+| P1 | Happy path: echo body, `status` defaults to `active`, `createdAt` Z-suffixed, `Location` relative `/projetos/{id}` | 201 | COVERED — PR.createReturns201WithRelativeLocationAndZSuffixedCreatedAt |
+| P2 | Missing required `name` | 400 invalid-request-body | MISSING |
+| P3 | `name` empty (minLength 1) | 400 invalid-request-body | MISSING (empty-string case only tested for task `title` on POST tarefas) |
+| P4 | `name` oversized (&gt;100) | 400 invalid-request-body | MISSING |
+| P5 | `description` oversized (&gt;2000) | 400 invalid-request-body | MISSING |
+| P6 | Unknown field (additionalProperties:false) | 400 invalid-request-body, errors[] names field | COVERED — ET.unknownFieldRejected |
+| P7 | `status` submitted on create (spec example ProjectStatusSubmittedOnCreate) | 400 invalid-request-body | PARTIAL — ET.statusSubmittedOnProjectCreate asserts 400 + errors[0].field/message but NOT the `type` URI |
+| P8 | Wrong JSON type for `name` (no scalar coercion) | 400 invalid-request-body | COVERED — ET.numberWhereStringExpectedIsRejectedNamingTheField, ET.wrongShapedFieldValueIsStillProblemJson |
+| P9 | Unparseable JSON body | 400, problem+json | COVERED — ET.malformedJsonIsStillProblemJson (see over-spec note O2) |
+| P10 | `description: null` accepted on create (nullable) | 201 | MISSING (null-clearing only tested on PATCH projeto) |
+
+## GET /projetos (listProjects)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| P11 | List all projects (bare array) | 200 | COVERED — PR.listReturnsProjectsAndHonorsStatusFilter |
+| P12 | `status` filter honored | 200 | COVERED (archived only) — PR.listReturnsProjectsAndHonorsStatusFilter; `status=active` variant not tested (minor) |
+| P13 | Ordering: `createdAt` asc, `id` asc tie-break — spec says "Ordering is part of the contract ... covered by contract tests" | 200, ordered | MISSING (tests use hasItems, order never asserted) |
+| P14 | Invalid `status` filter value | 400 invalid-query-parameter | COVERED — ET.invalidProjectStatusFilter (type + exact detail) |
+| P15 | Unrecognized query param ignored (`?foo=bar` → still 200) | 200 | MISSING |
+
+## GET /projetos/{id} (getProject)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| P16 | Get by id | 200 | COVERED — PR.getReturnsProject |
+| P17 | Non-UUID path id, plain ProblemDetails (no errors[]) | 400 invalid-path-parameter | COVERED — ET.getWithNonUuidIdReturnsPlainProblem (+ ET.nonCanonicalUuidAcceptedByUuidFromStringIsStillRejected) |
+| P18 | Unknown UUID | 404 resource-not-found | COVERED — ET.projectNotFound (type, title, detail) |
+
+## PATCH /projetos/{id} (updateProject)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| P19 | Update `name`; clear `description` with explicit null | 200 | COVERED — PR.patchUpdatesFieldsAndClearsDescriptionWithExplicitNull |
+| P20 | Archive (`status: archived`, no in_progress tasks) | 200 | COVERED — PR.archiveAndUnarchiveRoundTrip (also implicitly via RestTestSupport.archiveProject with a pending task in ET.rule6 setup) |
+| P21 | Un-archive (`archived → active`, deliberate scope decision) | 200 | COVERED — PR.archiveAndUnarchiveRoundTrip |
+| P22 | Same-state PATCH no-op per field on PROJECT — spec's own example `{"status":"active","name":"New Name"}` on active project → 200, name applied | 200 | MISSING (no-op only tested for tasks) |
+| P23 | Non-UUID path id with errors[]-shaped ValidationProblemDetails (InvalidPathParameterFieldError) | 400 invalid-path-parameter | PARTIAL — asserted only on PATCH /tarefas (ET.patchWithNonUuidIdReportsFieldErrorShape); never on PATCH /projetos |
+| P24 | Empty `{}` body (minProperties 1) | 400 invalid-request-body, field=body | COVERED — ET.emptyPatchBodyRejected |
+| P25 | Invalid `name` (empty/oversized) on patch | 400 invalid-request-body | MISSING |
+| P26 | readOnly field on patch (`id`, `createdAt`) | 400 invalid-request-body | MISSING |
+| P27 | Out-of-enum `status` string in body (e.g. "deleted") | 400 invalid-request-body | MISSING |
+| P28 | PATCH unknown project UUID | 404 resource-not-found | MISSING (404-on-PATCH only tested for /tarefas) |
+| P29 | Rule 1: archive blocked by in_progress task | 422 project-archive-blocked | PARTIAL — ET.rule1ArchiveBlockedByInProgressTask asserts type, title, status(422) but NOT `detail` (parent requires meaningful detail per rule) |
+| P30 | Rule 1 unblock path: archive succeeds after task leaves in_progress (e.g. done) | 200 | MISSING |
+| P31 | PATCH atomicity: request violating a rule persists nothing (e.g. `{name, status:archived}` blocked → name unchanged on re-GET) | 422 + no partial write | MISSING |
+
+## POST /projetos/{id}/tarefas (createTask)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| T1 | Happy path: `status` defaults to `pending`, `projectId` set, `completedAt` null, Location `/tarefas/{id}`, createdAt Z | 201 | COVERED — PTR.createReturns201WithRelativeLocationAndPendingStatus |
+| T2 | Non-UUID project id in path (checked before body) | 400 invalid-path-parameter | COVERED — ET.badRequestBeats404EvenWhenResourceCouldNeverExist |
+| T3 | Missing `title` | 400 invalid-request-body | MISSING |
+| T4 | Missing `priority` (required — no default; spec example TaskPriorityMissing) | 400 invalid-request-body | MISSING |
+| T5 | Empty `title` | 400 | COVERED — ET.multipleViolationsReportedTogether |
+| T6 | Oversized `title` (&gt;200) / `description` (&gt;2000) | 400 | MISSING |
+| T7 | Out-of-enum `priority` | 400 | COVERED — ET.multipleViolationsReportedTogether ("urgent") |
+| T8 | Body stage reports ALL violations at once in errors[] | 400, errors size ≥2 | COVERED — ET.multipleViolationsReportedTogether |
+| T9 | readOnly/not-accepted fields on create (`status`, `completedAt`, `id`, `projectId`) | 400 invalid-request-body | MISSING (only tested for project create `status`, P7) |
+| T10 | Create under unknown (valid-UUID) project | 404 resource-not-found | MISSING — no test at all for this 404 |
+| T11 | Rule 4: create in archived project | 422 task-create-project-archived | PARTIAL — ET.rule4CreateTaskInArchivedProject asserts type + detail(contains projectId) but NOT problem `status` member |
+
+## GET /projetos/{id}/tarefas (listTasks)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| T12 | List only that project's tasks | 200 | COVERED — PTR.listReturnsOnlyThatProjectsTasksAndHonorsFilters |
+| T13 | `status`+`priority` filters, AND semantics | 200 | COVERED — same test (individual single-filter variants untested — minor) |
+| T14 | Ordering `createdAt` asc, `id` tie-break (contractual) | 200, ordered | MISSING |
+| T15 | Non-UUID project id checked before query params | 400 invalid-path-parameter | COVERED — ET.pathParamBeatsInvalidQuery |
+| T16 | Invalid `status` filter | 400 invalid-query-parameter | COVERED — ET.bothFiltersInvalidReportsOnlyStatus (exact detail) |
+| T17 | Invalid `priority` filter ALONE (TaskPriorityFilterInvalid detail: "O parâmetro priority deve ser...") | 400 invalid-query-parameter | MISSING — priority-filter problem never asserted (always shadowed by status in the one test) |
+| T18 | Query fail-fast order: `status` before `priority` | 400, only status reported | COVERED — ET.bothFiltersInvalidReportsOnlyStatus |
+| T19 | List tasks of unknown (valid-UUID) project | 404 resource-not-found | MISSING |
+| T20 | Unrecognized query param ignored | 200 | MISSING |
+
+## GET /tarefas/{id} (getTask)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| T21 | Get by id | 200 | COVERED — TR.getReturnsTask |
+| T22 | Non-UUID id (plain ProblemDetails) | 400 invalid-path-parameter | PARTIAL — only tested on GET /projetos/{id} and PATCH /tarefas; GET /tarefas/{non-uuid} itself untested |
+| T23 | Unknown UUID | 404 resource-not-found | COVERED — ET.taskNotFound (also TR.deletePendingTask… re-GET) |
+
+## PATCH /tarefas/{id} (updateTask)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| T24 | pending → in_progress (completedAt stays null) | 200 | COVERED — TR.fullStatusLifecycleSetsCompletedAtOnDone |
+| T25 | in_progress → done auto-fills `completedAt`, Z-suffixed | 200 | COVERED — TR.fullStatusLifecycleSetsCompletedAtOnDone (asserts set + Z; "plausible" timestamp value — e.g. ≥ createdAt / near now — not asserted; acceptable but note) |
+| T26 | Edit non-status fields (title, priority) | 200 | COVERED — TR.patchEditsNonStatusFields |
+| T27 | Same-state `status` no-op + other fields apply (active project) | 200 | COVERED — TR.sameStateStatusIsANoOpEvenWithOtherFields |
+| T28 | Same-state `status` no-op even in ARCHIVED project (precedence over rule 6) | 200 | COVERED — ET.sameStateStatusNoOpBeatsRule6 |
+| T29 | Rule 6 allowance: pure non-status edit (title/description/priority, NO status field) on task in archived project | 200 | PARTIAL — only tested with a same-state `status` alongside (ET.sameStateStatusNoOpBeatsRule6); a status-free patch on archived project untested |
+| T30 | Non-UUID id, errors[]-shaped problem, checked before body | 400 invalid-path-parameter | COVERED — ET.patchWithNonUuidIdReportsFieldErrorShape, ET.pathParamBeatsInvalidBodyOnPatch |
+| T31 | `completedAt` submitted (rule 3 → 400, not 422; spec example CompletedAtSubmitted) | 400 invalid-request-body, field=completedAt | COVERED — ET.completedAtSubmittedOnTaskPatchIsReadOnly (type + field + "somente leitura") |
+| T32 | Empty `{}` PATCH body on /tarefas (minProperties 1) | 400 invalid-request-body | PARTIAL — only tested on PATCH /projetos (ET.emptyPatchBodyRejected) |
+| T33 | Invalid `title` (empty/oversized) on patch | 400 | MISSING |
+| T34 | Out-of-enum string `status`/`priority` in patch body | 400 invalid-request-body | PARTIAL — only wrong-JSON-type tested (ET.numberWhereEnumStringExpectedIsRejectedNamingTheField); out-of-enum string (e.g. "urgent"/"cancelled") on PATCH untested |
+| T35 | Unknown task UUID | 404 resource-not-found | COVERED — ET.notFoundBeats422 |
+| T36 | Rule 5: skip-ahead pending → done | 422 task-status-regression | PARTIAL — ET.rule5StatusSkipAhead asserts type only; no `status` member, no `detail` |
+| T37 | Rule 5: backward move (in_progress → pending, done → in_progress, done → pending) | 422 task-status-regression | MISSING — the "regression" half of the rule is never exercised at REST level |
+| T38 | Rule 6: status change on task in archived project | 422 task-status-change-project-archived | PARTIAL — ET.rule6StatusChangeInArchivedProject asserts type only; no `status` member, no `detail` |
+| T39 | 422 precedence: rule 6 before rule 5 when both violated | 422 rule-6 type | COVERED — ET.rule6WinsWhenRule5IsAlsoViolated |
+| T40 | 404 before 422 | 404 | COVERED — ET.notFoundBeats422 |
+| T41 | PATCH atomicity: title+invalid-status in one request → 422, title NOT persisted | 422 + no partial write | MISSING |
+
+## DELETE /tarefas/{id} (deleteTask)
+
+| # | Scenario | Expected | Coverage |
+|---|---|---|---|
+| T42 | Delete pending task | 204, then GET 404 | COVERED — TR.deletePendingTaskReturns204AndTaskIsGone |
+| T43 | Non-UUID id on DELETE | 400 invalid-path-parameter | MISSING (path-param 400 never tested on DELETE) |
+| T44 | DELETE unknown task UUID | 404 resource-not-found | MISSING |
+| T45 | Rule 2: delete in_progress task | 422 task-delete-not-pending | PARTIAL — ET.rule2DeleteNonPendingTask asserts type + detail(contains "in_progress") but NOT problem `status` member |
+| T46 | Rule 2: delete `done` task (other non-pending state) | 422 task-delete-not-pending | MISSING |
+
+## Cross-cutting contract guarantees
+
+| # | Scenario | Coverage |
+|---|---|---|
+| X1 | Response schema validation against the OpenAPI document (swagger-request-validator) — required by the task brief | MISSING ENTIRELY — no swagger-request-validator dependency in quarkus-impl/pom.xml (only quarkus-smallrye-openapi, which publishes the spec, it does not validate responses); no test loads spec/openapi.yaml |
+| X2 | Datetime contract: every date-time UTC Z-suffixed, never numeric offset | PARTIAL — Z asserted on createdAt (both creates) and completedAt-on-done; full RFC 3339 regex only on project create; list/GET responses unchecked (would be subsumed by X1) |
+| X3 | `Content-Type: application/problem+json` on all error responses | PARTIAL — asserted in most ET tests, but not on P7, T36/T38 (422s assert type only via body), nor any MISSING rows |
+| X4 | 400 → 404 → 422 stage ordering | COVERED — ET.Precedence (pathParamBeatsInvalidBodyOnPatch, pathParamBeatsInvalidQuery, badRequestBeats404EvenWhenResourceCouldNeverExist, notFoundBeats422) |
+
+## Summary — MISSING scenarios (checklist)
+
+1. [ ] X1 — OpenAPI response-schema validation (swagger-request-validator) wired into all REST tests — biggest gap
+2. [ ] P2/P3/P4/P5 — POST /projetos: missing name, empty name, name &gt;100, description &gt;2000
+3. [ ] P10 — POST /projetos with `description: null`
+4. [ ] P13 / T14 — ordering contract (createdAt asc, id tie-break) on both list endpoints — spec explicitly promises contract-test coverage
+5. [ ] P15 / T20 — unrecognized query parameter is ignored (tolerant reader)
+6. [ ] P22 — same-state status no-op on PROJECT patch with sibling field (spec's own worked example)
+7. [ ] P25/P26/P27 — PATCH /projetos: invalid name, readOnly `id`/`createdAt`, out-of-enum `status`
+8. [ ] P28 — PATCH /projetos/{unknown-uuid} → 404
+9. [ ] P30 — archive succeeds once no task is in_progress (rule 1 unblock)
+10. [ ] P31 / T41 — PATCH atomicity (nothing persisted on 422)
+11. [ ] T3/T4 — POST tarefas: missing `title`, missing `priority` (TaskPriorityMissing example)
+12. [ ] T6/T33 — oversized title (&gt;200) / description (&gt;2000) on task create and patch
+13. [ ] T9 — readOnly/not-accepted fields on task create (`status`, `completedAt`, `projectId`, ...)
+14. [ ] T10 — POST tarefas under unknown project → 404 (explicitly required by the brief)
+15. [ ] T17 — invalid `priority` filter alone → its own invalid-query-parameter detail
+16. [ ] T19 — GET tarefas of unknown project → 404
+17. [ ] T37 — rule 5 backward moves (in_progress→pending, done→in_progress, done→pending) — only skip-ahead is tested
+18. [ ] T43/T44 — DELETE: non-UUID id → 400; unknown UUID → 404
+19. [ ] T46 — rule 2 with a `done` task
+
+## Summary — PARTIAL scenarios
+
+- P7 — statusSubmittedOnProjectCreate: `type` URI not asserted
+- P23 / T22 / T32 / T34 — path-param field-error shape, GET-task 400, empty-body 400, out-of-enum body strings: each asserted on only ONE endpoint, extrapolated to the rest
+- P29 (rule 1) — `detail` not asserted
+- T11 (rule 4) — problem `status` member not asserted
+- T29 — rule 6 "other fields remain editable" only tested bundled with a same-state status, never as a pure non-status patch
+- T36 (rule 5), T38 (rule 6) — only `type` asserted; `status` and `detail` missing. The brief requires all five/six 422 rules to assert type + status + meaningful detail; today only rule 1 asserts `status`, only rules 2 and 4 assert `detail`, none asserts all three.
+- X2, X3 — datetime and problem+json content-type asserted unevenly
+
+## Over-specification (tests asserting behavior the spec does not pin down)
+
+- O1 — Exact-equality assertions on Portuguese `detail`/`message` strings (ET.projectNotFound, ET.taskNotFound, ET.getWithNonUuidId..., ET.invalidProjectStatusFilter, ET.bothFiltersInvalid..., ET.patchWithNonUuidId...). These strings come from `components.examples`, which OpenAPI treats as illustrative, not normative; the schema only requires `detail` be human-readable. Borderline: they DO reference the spec document, but `containsString` on the load-bearing token would be safer than `equalTo` of full sentences. (Exception: the query-filter details are quoted verbatim in the spec's error-reporting policy examples, so those are defensible.)
+- O2 — ET.malformedJsonIsStillProblemJson and ET.wrongShapedFieldValueIsStillProblemJson: unparseable JSON / wrong-shaped values → `invalid-request-body` type URI. The spec's 400 responses describe schema violations of a parsed body; the mapping of a JSON parse failure to that specific type URI is an implementation choice, not spec text. Status 400 itself is fine.
+- O3 — ET.getWithNonUuidIdReturnsPlainProblem asserts `errors` is absent (`nullValue()`). The spec models PathParamBadRequest as plain ProblemDetails (which doesn't forbid extra members — RFC 7807 allows extensions). Asserting absence is stricter than the schema. Low risk, but it's testing implementation shape, not contract.
+- O4 — ET.nonCanonicalUuidAcceptedByUuidFromStringIsStillRejected (`/projetos/1-1-1-1-1` → 400): defensible under `format: uuid` strict-RFC reading and consistent with the spec's invalid-UUID example, but "strict textual UUID, not Java's lenient UUID.fromString" is an interpretation the spec never states. Worth a spec note rather than deletion.
+
+Bottom line: precedence guarantees and business-rule type URIs are well covered by ErrorTaxonomyTest; the systematic gaps are (1) no response-vs-spec schema validation at all, (2) rule 5's regression half, rule 2's done-variant, and the two "unknown parent project" 404s, (3) boundary/length/required-field 400s, (4) contractual ordering of list responses, and (5) 422 ProblemDetails assertions that stop at `type` without `status`+`detail`.</result>
+<usage><subagent_tokens>36542</subagent_tokens><tool_uses>4</tool_uses><duration_ms>172786</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-07 10:35**
+
+<task-notification>
+<task-id>bphvwt500</task-id>
+<tool-use-id>toolu_01JqrkHmdW48VkmSsmKpnMMd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/bphvwt500.output</output-file>
+<status>completed</status>
+<summary>Background command "Run all four REST contract test classes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+**2026-07-07 10:41**
+
+<task-notification>
+<task-id>bosc43mm4</task-id>
+<tool-use-id>toolu_01Ft1dEd6SdEESyGVWX8Aw5y</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/bosc43mm4.output</output-file>
+<status>completed</status>
+<summary>Background command "Full Maven verify for quarkus-impl" completed (exit code 0)</summary>
+</task-notification>
+
+---
+**2026-07-07 17:39**
+
+/log-ai suíte de contrato Quarkus — swagger-request-validator 2.44.9 (compat verificada contra RestAssured 6 do BOM), validação de schema em toda resposta da suíte, ~30 testes preenchendo a matriz do contract-tester (156 no total), política de asserção documentada no javadoc

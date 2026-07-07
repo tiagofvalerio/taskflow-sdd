@@ -841,3 +841,63 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
 4. **Resultado** — Aceito como gerado, sem edições. Origem do achado e
    análise do porquê nem testes nem auditoria pegaram: `ai/revisoes.md`,
    entrada 12.
+
+## 17. Camada de validação de contrato — matriz de cobertura + validação de schema nas respostas
+
+1. **Contexto** — Passo dedicado de validação de contrato do
+   `quarkus-impl` contra a spec congelada (seis regras de negócio +
+   garantias de precedência). Duas frentes: matriz de cobertura
+   (cenário da spec × teste existente) produzida pelo agente
+   `contract-tester`, e validação automática de schema OpenAPI em toda
+   resposta da suíte REST via `swagger-request-validator-restassured`
+   (Atlassian). Commits `83ffc4b` e `f4d8eb4`.
+
+2. **Prompt (resumo)** — (1) Usar o agente `contract-tester` primeiro
+   para produzir a matriz de cobertura refletindo a spec congelada (seis
+   regras + precedências), não o texto original do desafio de cinco
+   regras. (2) Implementar o que a matriz apontasse como faltante e
+   adicionar validação de schema das respostas contra
+   `spec/openapi.yaml` — investigando antes o estado atual do
+   `swagger-request-validator-restassured` quanto à compatibilidade com
+   as versões de RestAssured/Quarkus do projeto e reportando os achados
+   antes de integrar. Toda resposta de teste REST deve validar contra o
+   documento da spec, não só contra asserções manuais.
+
+3. **O que a IA produziu** —
+   - Investigação prévia (reportada antes da integração): última versão
+     2.44.9 (jun/2025, sem linha 3.x), compilada contra RestAssured
+     5.1.1; o BOM do Quarkus 3.37.1 fixa RestAssured **6.0.0** — API de
+     `Filter` inalterada, compatibilidade confirmada executando a suíte.
+     Spec em OpenAPI 3.0.3, suportada integralmente.
+   - `SpecValidatedRestTest` (classe-base de teste): filtro global
+     RestAssured validando toda resposta contra a spec. Response-only
+     (`validation.request` → IGNORE, pois os testes de taxonomia 400
+     enviam requests malformados de propósito) e
+     `withResolveCombinators(true)` — sem isso o validador injeta
+     `additionalProperties: false` por ramo do `allOf` e rejeita toda
+     resposta `ValidationProblemDetails` (quirk documentado no FAQ do
+     projeto; derrubou 28 testes na primeira rodada). As quatro classes
+     REST estendem a base.
+   - Prova negativa: renomeando `status` → `situacao` no
+     `ProjectResponse`, o validador falhou o teste com "missing required
+     properties [status]" — o filtro valida de fato. Revertido.
+   - ~30 testes novos preenchendo a matriz: metade "regressão" da regra
+     5 (três movimentos para trás), regra 2 com tarefa `done`, caminho
+     de desbloqueio da regra 1, 404s de projeto-pai desconhecido e de
+     PATCH/DELETE, 400s de path em GET/DELETE de tarefa, 400s de corpo
+     (obrigatórios, tamanhos, enums, readOnly) nos quatro endpoints de
+     escrita, ordenação contratual das duas listas, query params
+     desconhecidos ignorados, no-op de status em projeto (exemplo da
+     própria spec), edição não-status da regra 6, atomicidade do PATCH
+     (projeto e tarefa). Todas as seis regras 422 agora asserem `type` +
+     membro `status` + token do `detail`.
+   - Política de asserção documentada no javadoc do `ErrorTaxonomyTest`
+     (normativo = igualdade exata; ilustrativo = token do prose;
+     exceção = detalhes de filtro citados verbatim na spec) — mesma
+     política valerá para a suíte Rails no dia 3.
+
+4. **Resultado** — Aceito com um refinamento do usuário: a política de
+   asserção (abrandar strings exatas ilustrativas para tokens) foi
+   decisão do usuário sobre achado de sobre-especificação da matriz, com
+   a adição de documentá-la na própria suíte. Suíte completa: 156/156
+   no `./mvnw verify`.
