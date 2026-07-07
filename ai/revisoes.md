@@ -680,3 +680,50 @@ incompleta, e por quê — não é um changelog de features.
    integrar com o comportamento default de um framework às vezes exige
    ler o código dele, não a documentação; a IA fez isso sozinha, mas só
    depois que o auditor apontou o buraco.
+
+## 12. Coerção escalar do Jackson — drift de contrato invisível, pego pelo /sdd-check
+
+1. **Data / Fase** — 2026-07-07, fase de implementação Quarkus (adapters
+   já commitados e auditados; achado da primeira rodada do `/sdd-check`,
+   corrigido em `5d20b93`).
+
+2. **O que a IA sugeriu** — Os request DTOs tipavam todos os campos como
+   `String` (decisão deliberada e correta em si: permitia coletar todos
+   os erros de enum/validação de uma vez em `errors[]`, em vez do
+   fail-fast do Jackson). O que a IA não configurou foi a coerção
+   escalar default do Jackson por baixo disso: `{"name": 123}` era
+   silenciosamente coagido para `"123"` e aceito com `201`.
+
+3. **Problema identificado** — A spec declara `type: string`; um número
+   JSON não é uma string, e a requisição deveria falhar com `400`
+   `invalid-request-body`. O drift era duplamente invisível: (a) nenhum
+   teste enviava tipo errado em campo de texto — de novo o padrão das
+   entradas 9 e 11: a suíte testava o que foi escrito, não o espaço de
+   entradas que o contrato promete; (b) a auditoria de código do
+   `domain-guardian` (quarta passada) também não pegou, porque não há
+   linha errada pra apontar — o defeito era um *default de framework
+   não configurado*, exatamente a categoria "o que nunca foi escrito".
+   Quem pegou foi o `/sdd-check`, comparação sistemática spec×código —
+   a própria IA reportou o drift contra o próprio código, no modo
+   report-only pedido. Notável: campos de enum não eram afetados (o
+   valor coagido falhava na validação de domínio de valores), só os de
+   texto livre.
+
+4. **Correção aplicada** — `JacksonCoercionConfig` implements
+   `ObjectMapperCustomizer` (global pra camada REST, não por DTO):
+   coerção `Integer`/`Float`/`Boolean` → alvo textual configurada como
+   `CoercionAction.Fail`, escopada a `LogicalType.Textual` — DTOs não
+   têm campo numérico (direção inversa sem o que configurar) e a
+   serialização de resposta fica intacta. A falha vira
+   `MismatchedInputException`, que os mappers da entrada 11 já
+   convertem no `400 invalid-request-body` com o campo nomeado — nenhum
+   mapper novo, nenhum 500 cru. Dois testes de taxonomia novos:
+   `{"name": 123}` → 400/`name`; `{"priority": 1}` → 400/`priority`.
+   O código mudou, a spec ficou intocada — direção única do fluxo SDD.
+   Segunda rodada do `/sdd-check`: zero drift. Suíte 121/121.
+
+5. **Lição** — Default tolerante de framework é fonte de drift que nem
+   revisão de código nem a suíte que o autor escreveu enxergam — só
+   comparação sistemática contra o contrato (e, mecanicamente, a suíte
+   de contrato/Schemathesis do próximo passo); conformidade não é o que
+   o código faz, é o que o framework deixa passar por ele.

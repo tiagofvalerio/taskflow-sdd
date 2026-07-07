@@ -799,3 +799,45 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    teste feitas pela própria IA antes do commit, descritas acima; sem
    intervenção do usuário no código). Auditoria do `domain-guardian`
    sobre os adapters em andamento ao registrar esta entrada.
+
+## 16. Correção do drift de coerção escalar (achado do /sdd-check)
+
+1. **Contexto** — Sequência da primeira rodada do `/sdd-check` sobre
+   `quarkus-impl` (report-only), que encontrou exatamente um drift:
+   coerção escalar default do Jackson aceitava `{"name": 123}` como
+   `"123"` onde a spec exige `type: string`. Racional completo e
+   contexto do achado em `ai/revisoes.md`, entrada 12. Commit `5d20b93`.
+
+2. **Prompt (resumo)** — Corrigir o drift via customizer global do
+   ObjectMapper do Quarkus (não por DTO): número onde o schema espera
+   string (e vice-versa) deve falhar a desserialização e emergir como o
+   `400 invalid-request-body` da spec (`ValidationProblemDetails`)
+   nomeando o campo ofensor. Testes de taxonomia exigidos: `POST
+   /projetos` com `{"name": 123}` → 400 com `errors[]` contendo `name`;
+   `PATCH /tarefas/{id}` com `{"priority": 1}` → mesmo tratamento.
+   Verificar que a falha cai no tratamento 400 existente — não um 500
+   cru do Jackson nem um 400 genérico sem ProblemDetails.
+
+3. **O que a IA produziu** —
+   - `adapter/in/rest/JacksonCoercionConfig.java`: `ObjectMapperCustomizer`
+     (`@Singleton`) com `coercionConfigFor(LogicalType.Textual)` →
+     `CoercionAction.Fail` para os shapes `Integer`, `Float` e
+     `Boolean`. Escopo deliberadamente estreito: alvo textual apenas —
+     os request DTOs não têm campo numérico (a direção "string onde se
+     espera número" não tem o que configurar) e a serialização de
+     resposta fica intacta.
+   - Nenhum mapper novo: a coerção que falha lança
+     `MismatchedInputException`, já capturada pelos mappers criados na
+     correção da entrada 11 de `ai/revisoes.md` — o campo ofensor sai do
+     path do próprio Jackson.
+   - 2 testes novos no `ErrorTaxonomyTest`
+     (`numberWhereStringExpectedIsRejectedNamingTheField`,
+     `numberWhereEnumStringExpectedIsRejectedNamingTheField`), ambos
+     asserindo status 400, content-type `application/problem+json`,
+     type URI `invalid-request-body` e o campo nomeado.
+   - Suíte 121/121 na primeira execução; segunda rodada do `/sdd-check`
+     na sequência: zero drift.
+
+4. **Resultado** — Aceito como gerado, sem edições. Origem do achado e
+   análise do porquê nem testes nem auditoria pegaram: `ai/revisoes.md`,
+   entrada 12.

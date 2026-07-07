@@ -1138,3 +1138,39 @@ Per CLAUDE.md: significant audit of generated code — remember `/log-ai`, and `
 **2026-07-07 02:12**
 
 /revisar
+
+---
+**2026-07-07 02:41**
+
+/sdd-check quarkus-impl
+
+---
+**2026-07-07 02:46**
+
+Fix the coercion drift found by /sdd-check: configure Jackson (via Quarkus
+ObjectMapper customizer) to reject scalar coercion in request bodies — a JSON
+number where the schema expects a string (and vice versa) must fail
+deserialization and surface as the spec's 400 invalid-request-body
+ValidationProblemDetails, naming the offending field. Apply strict coercion
+globally for the REST layer, not per-DTO.
+
+Add taxonomy tests: POST /projetos with {"name": 123} -> 400,
+type .../invalid-request-body, errors[] contains field "name"; and one enum
+case, PATCH /tarefas/{id} with {"priority": 1} -> same treatment. Verify the
+coercion failure maps into our existing 400 body-stage handling (not a raw
+Jackson 500 or a generic 400 without ProblemDetails).
+
+---
+**2026-07-07 02:49**
+
+/sdd-check quarkus-impl
+
+---
+**2026-07-07 02:50**
+
+/revisar primeiro drift real de implementação pego pelo /sdd-check: coerção escalar do Jackson aceitava número onde a spec exige string ({"name": 123} virava "123" silenciosamente) — requests fora do contrato eram aceitos. Correção: coerção estrita global no ObjectMapper, falha mapeada para o 400 invalid-request-body com o campo nomeado (e não um 500 cru do Jackson). O código mudou, a spec ficou — como manda o fluxo. Lição: defaults tolerantes de framework são fonte de drift invisível; conformidade exige configurá-los explicitamente.
+
+---
+**2026-07-07 02:51**
+
+/log-ai correção do drift de coerção pego pelo /sdd-check — coerção estrita no ObjectMapper global, falha de desserialização mapeada para 400 invalid-request-body com campo nomeado, testes de taxonomia para número-em-string e número-em-enum
