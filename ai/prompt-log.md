@@ -1429,3 +1429,129 @@ Bottom line: precedence guarantees and business-rule type URIs are well covered 
 **2026-07-07 17:39**
 
 /log-ai suíte de contrato Quarkus — swagger-request-validator 2.44.9 (compat verificada contra RestAssured 6 do BOM), validação de schema em toda resposta da suíte, ~30 testes preenchendo a matriz do contract-tester (156 no total), política de asserção documentada no javadoc
+
+---
+**2026-07-07 17:41**
+
+/revisar contract-tester flagrou sobre-especificação nos meus próprios testes de taxonomia: igualdade exata em strings de detail copiadas dos examples da spec — examples em OpenAPI são ilustrativos, não normativos, e a exigência forçaria o Rails a reproduzir as frases do Java caractere a caractere, divergência que o contrato nunca prometeu. Correção: política de asserção explícita — type URI/status/shape/field exatos, prosa por token de carga (containsString), exceto texto citado normativamente na spec. Lição: testes também podem driftar do contrato — para mais, não só para menos.
+
+---
+**2026-07-07 17:42**
+
+What exactly are the O2/O4 spec-interpretation notes the matrix flagged? Show
+me each before I decide whether they go into docs/decisoes.md.
+
+---
+**2026-07-07 17:45**
+
+Both O2 and O4 get promoted to the spec (they are contract gaps the
+implementation discovered, not code drift), plus rationale in decisoes.md:
+
+1. spec/openapi.yaml:
+   - O2: extend the invalid-request-body documentation (the body-400 components
+     and/or the validation-precedence text): a request body that cannot be
+     parsed as JSON, or whose value shapes cannot be bound (e.g. object where
+     string expected), is an invalid-request-body 400 with the same type URI,
+     RFC 7807 format, field named in errors[] where the parse position allows.
+   - O4: extend the path-parameter documentation (ProjectIdParam/TaskIdParam
+     and/or invalid-path-parameter): ids must be the canonical RFC 4122 textual
+     form (8-4-4-4-12 hex); non-canonical strings that some platform parsers
+     tolerate (e.g. "1-1-1-1-1") are rejected with 400. Add "1-1-1-1-1" as an
+     example in the invalid-path-parameter examples.
+
+2. Run the spec-reviewer agent as a confirmation pass on just these two
+   additions (consistency with existing precedence/taxonomy text, no
+   contradictions).
+
+3. docs/decisoes.md: add both to the error-model section (or a short
+   "Interpretações fixadas pela implementação" subsection): the two questions,
+   the readings chosen, why (least-surprise parse mapping; platform-independent
+   UUID line), and the process note — gaps found by the contract suite were
+   promoted to spec text so Day 3 implements them from the contract, not from
+   reverse-engineering the Java tests.
+
+---
+**2026-07-07 17:47**
+
+<task-notification>
+<task-id>bz84l16bv</task-id>
+<tool-use-id>toolu_01Uc7vtjvFbZKQt2vyUv33fo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/bz84l16bv.output</output-file>
+<status>completed</status>
+<summary>Background command "Confirm edited spec still parses under validator" completed (exit code 0)</summary>
+</task-notification>
+
+---
+**2026-07-07 17:49**
+
+<task-notification>
+<task-id>a5b7cab4d4a3f80b6</task-id>
+<tool-use-id>toolu_01UYh5YHAh94Zmi9BhmFp5Jj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/a5b7cab4d4a3f80b6.output</output-file>
+<status>completed</status>
+<summary>Agent "Review two spec additions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I could not run `git diff` (this reviewer thread has no shell), so I located the two additions directly in the current file — they match the described hunks exactly: O2 at lines 90–100 plus the four body-400 descriptions (542–550, 561–570, 583–592, 607–616); O4 at lines 101–107, 499–523, 526–540, and 1052–1059 of `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml`. Findings below cover only these hunks.
+
+## Verdicts
+
+- **O2 (unparseable/unbindable bodies): issues found** — 1 blocker, 1 blocker-borderline major, 2 minor.
+- **O4 (canonical path ids): issues found** — 1 blocker, 2 minor. Naming, payload shape, YAML, and `$ref` target are all clean.
+
+## Findings
+
+**1. BLOCKER — O2 bullet drifts from the "reports every violating field at once" policy for unbindable (type-mismatch) bodies.**
+Location: lines 96–99 vs. lines 83–85.
+The error-reporting bullet states body validation "reports every violating field at once in `errors[]`". The new O2 bullet says "the offending field named in `errors[]`" — singular. For a syntactically valid body with *two* type-mismatched fields (e.g. `{"name": 5, "description": 7}` on `POST /projetos`), policy A requires both entries; the new text reads as one. This matches a real framework split: Jackson databind fails fast on the first mismatched field, while Rails parses the whole document and can collect all mismatches — two conformant implementations, different payloads. Fix: state explicitly that *unbindable-but-parseable* bodies follow the every-violating-field policy (all mismatched fields in `errors[]`), and that the parse-position/`field: body` fallback applies only to *syntactically unparseable* bodies — or, if fail-fast single-field is intended for binding failures, say so as an explicit exception to the line-84 policy.
+
+**2. BLOCKER — "whenever the parse position allows" makes `errors[].field` implementation-defined for unparseable JSON, with no conformance carve-out.**
+Location: lines 97–99.
+For the same truncated payload (e.g. `{"name": `), Jackson exposes a JSON path (implementer names `field: name`) while Ruby's `JSON.parse` exposes only line/column (implementer falls back to `field: body`). Both readings satisfy "whenever the parse position allows" — so contract tests cannot assert a single expected body, and the two stacks will legitimately diverge. The spec already has a pattern for deliberate flexibility (the trailing-slash bullet, lines 122–125: "unspecified and excluded from conformance testing") but O2 doesn't use it. Fix: either mandate `field: body` unconditionally for syntactically unparseable bodies (deterministic, simplest), or append "which field is named for parse errors is implementation-defined and excluded from conformance testing".
+
+**3. BLOCKER — O4 leaves UUID case-sensitivity undefined.**
+Location: lines 101–107 (and echoed at 504, 517, 528).
+"Canonical RFC 4122 textual form — 8-4-4-4-12 hexadecimal digits" is self-contradictory on case: RFC 4122 §3 outputs lowercase but is case-insensitive on input, while "8-4-4-4-12 hexadecimal digits" is satisfied by `3FA85F64-5717-4562-B3FC-2C963F66AFA6`. One implementer reads "canonical" strictly (uppercase → `400 invalid-path-parameter`); the other reads the digit-shape rule (uppercase → `200`/`404`). Both Java's `UUID.fromString` and a naive Rails regex accept uppercase, so the divergence is realistic and precisely the class of platform-dependence this bullet exists to eliminate. Fix: add one sentence to the scope bullet (and it alone — the param/response descriptions already defer to it): e.g. "Hex digits are accepted case-insensitively; only the grouping/length shape is enforced" or "lowercase only".
+
+**4. MAJOR — `NonCanonicalUuidPathParameter` includes `instance: /projetos/1-1-1-1-1` in a response component shared by task endpoints, and its sibling example omits `instance`.**
+Location: line 1059 vs. lines 1044–1050; response used at lines 409 and 484 (`GET /tarefas/{id}`, `DELETE /tarefas/{id}`).
+Two problems: (a) the hard-coded project path is wrong-by-example for two of the three operations referencing `PathParamBadRequest`; the spec's own solution to this elsewhere is path-agnostic examples or per-resource components (`ProjectNotFound`/`TaskNotFound` are split for exactly this reason). (b) The two examples of the *same* response now disagree on whether `instance` is emitted — `InvalidUuidPathParameter` omits it. `instance` is optional in `ProblemDetails`, so this won't break validation, but it invites divergent emission behavior. Fix: drop line 1059 (aligning with `InvalidUuidPathParameter` — the example's payload then differs from its sibling only in `summary`, which is fine since the whole point is "same type URI, same shape").
+
+**5. MINOR — Asymmetric coverage: `TaskFiltersBadRequest` handles the same path-id failure but mentions neither the canonical rule nor the new example.**
+Location: lines 643–658 (also lines 561–564, 583–586, 607–609 for the `InvalidPathParameterFieldError` variant).
+Normatively this is safe — `/projetos/{id}/tarefas` references `ProjectIdParam` (line 304), whose new description (504–507) carries the rule, and the scope bullet is operation-independent. So one canonical location *is* defensible. But `PathParamBadRequest` got both the expanded description and the example while `TaskFiltersBadRequest` got nothing, which reads as an oversight rather than a decision. Fix (cheapest consistent option): add `nonCanonicalUuidPathParameter: $ref: "#/components/examples/NonCanonicalUuidPathParameter"` under line 654 and the "(including non-canonical forms — see the path-id scope decision)" clause to line 645–646; or leave as-is but only if you accept the asymmetry knowingly.
+
+**6. MINOR — Cross-reference name drops half the decision's title.**
+Location: lines 550, 569–570, 591–592, 615–616 ("see the unparseable-body scope decision") vs. bullet title at line 90 ("Unparseable **and unbindable** bodies…").
+The four pointers say "unparseable-body scope decision" even though in three of the four descriptions the sentence's nearest antecedent is the *unbindable* case ("whose value shapes cannot be bound"). Prose pointers aren't anchors, so this resolves, but it's duplicate-with-drift of exactly the kind the review brief asks about. Fix: "see the unparseable/unbindable-body scope decision" in all four.
+
+**7. MINOR — The `field: body` fallback introduces a new payload shape with no example.**
+Location: lines 97–99; `components.examples` (905–1094).
+Every other named 400 case has a concrete example; the unparseable-JSON case (which per finding 2 should probably be pinned to `field: body`) has none, so implementers will copy `detail`/`message` wording from nowhere. The `field: body` precedent exists (`EmptyPatchBody`, line 1041), which helps, but an `UnparseableRequestBody` example referenced from the four body-400 responses would close the loop. Optional given the "illustrative, not exhaustive" disclaimers — but if findings 1–2 are fixed by mandating `field: body`, add the example in the same edit.
+
+## Clean checks (no findings)
+
+- Validation-precedence consistency: both bullets slot into the existing path → query → body fail-fast order without contradiction; O2 correctly scopes itself to the body stage, O4 to the path stage ("400, never 404" at lines 57–58 already anticipated it).
+- Naming: `NonCanonicalUuidPathParameter` PascalCase component key (1052), `nonCanonicalUuidPathParameter` camelCase reference key (539), English name, Portuguese `summary`/`detail` — all per the convention at lines 129–140.
+- Payload shape: the new example carries required `type`/`title`/`status` and valid optional members; reusing the existing `invalid-path-parameter` type URI (rather than minting a new one) is correct — the decision's point is that non-canonical *is* invalid.
+- YAML: the new hunks are structurally valid (prose lives inside `|` block scalars; the new example map entry and both `$ref`s at 539–540 → 1052 resolve).
+- 400 vs 422 criterion (lines 126–128): both additions are squarely malformed-request territory; no leakage into 422.
+
+Summary: 3 blockers (1, 2, 3), 1 major (4), 3 minor (5, 6, 7). All in `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml`. The blockers share one theme: both new bullets nail down *that* these cases are 400 with the right type URI, but leave the *payload determinism* (which fields in `errors[]`, case handling) loose enough for the two stacks to diverge.</result>
+<usage><subagent_tokens>25275</subagent_tokens><tool_uses>3</tool_uses><duration_ms>143878</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-07 17:53**
+
+<task-notification>
+<task-id>b908atuom</task-id>
+<tool-use-id>toolu_01MFLzEmZGpYz8i1pp3286fW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/885089d9-e6b7-403a-aa2b-deaa2e8d854b/tasks/b908atuom.output</output-file>
+<status>completed</status>
+<summary>Background command "Run REST suite against revised spec and new tests" completed (exit code 0)</summary>
+</task-notification>
+
+---
+**2026-07-07 17:56**
+
+/revisar a suíte de contrato revelou duas lacunas na spec congelada (não drift do código): type URI de JSON não-parseável indefinido, e forma textual de UUID sem linha normativa (o parser leniente do Java aceita "1-1-1-1-1"; um regex estrito rejeita — divergência garantida entre stacks). Decisão: promover ambas ao texto da spec via o rito de emenda (spec-reviewer em passe de confirmação), com racional no decisoes.md — testes provam conformidade ao contrato, não podem SER o contrato. Lição: implementar contra a spec também é revisá-la; lacunas descobertas viram texto normativo, não conhecimento tácito no teste.
