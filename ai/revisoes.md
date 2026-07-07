@@ -778,3 +778,55 @@ incompleta, e por quê — não é um changelog de features.
    fantasma que a segunda implementação herda sem nunca ter sido
    pactuado; a fronteira normativo/ilustrativo precisa ser política
    explícita da suíte, não hábito do gerador.
+
+## 14. Duas lacunas na spec congelada — descobertas pela suíte, promovidas a texto normativo
+
+1. **Data / Fase** — 2026-07-07, sequência da camada de validação de
+   contrato (matriz do `contract-tester`, achados O2/O4); emenda da spec
+   em `e19b290`, testes de pinagem em `4bc3a69`, racional em `d498908`.
+
+2. **O que a IA sugeriu** — Em fases anteriores, a IA escreveu testes
+   que respondiam duas perguntas que a spec (também escrita pela IA)
+   nunca tinha respondido:
+
+   ```java
+   // spec não dizia qual type URI para JSON não-parseável:
+   .body("{invalid").post("/projetos") ... .body("type", equalTo(ERR + "invalid-request-body"));
+   // spec não dizia onde passa a linha textual de format: uuid:
+   .get("/projetos/1-1-1-1-1") ... .statusCode(400);
+   ```
+
+   Ambas as respostas eram razoáveis — e ambas viviam só nos testes.
+
+3. **Problema identificado** — A suíte de contrato revelou duas lacunas
+   na spec congelada (não drift do código): type URI de JSON
+   não-parseável indefinido, e forma textual de UUID sem linha normativa
+   (o parser leniente do Java aceita `1-1-1-1-1`; um regex estrito
+   rejeita — divergência garantida entre stacks). Conhecimento tácito no
+   teste Java é contrato invisível para o Rails do dia 3: a segunda
+   implementação só descobriria as duas regras falhando contra a suíte
+   da primeira — engenharia reversa, o oposto de SDD. Testes provam
+   conformidade ao contrato; não podem SER o contrato.
+
+4. **Correção aplicada** — Promoção de ambas ao texto da spec via o rito
+   de emenda: bullets de escopo em `info.description`, descrições dos
+   componentes de 400 de corpo e dos params de path, exemplos novos
+   (`UnparseableRequestBody`, `NonCanonicalUuidPathParameter`), e passe
+   de confirmação do `spec-reviewer` — que **derrubou a primeira redação
+   da própria promoção**: 3 bloqueadores, todos do mesmo tema ("fixou
+   *que* é 400 com o type certo, mas deixou o payload indeterminado").
+   "Campo nomeado quando a posição do parse permite" deixava `errors[]`
+   dependente do parser (Jackson expõe path; `JSON.parse` do Ruby só
+   linha/coluna); "canônico RFC 4122" sozinho era autocontraditório
+   quanto a caixa (o RFC emite minúsculas mas aceita input em qualquer
+   caixa). Redação final determinística: imparseável → sempre `field:
+   body`; não-vinculável → fail-fast em ordem de documento, só o
+   primeiro campo; hex sem distinção de caixa, só shape 8-4-4-4-12
+   imposto. Cada regra ganhou teste de pinagem (76/76). Racional
+   completo em `docs/decisoes.md`, seção 3.
+
+5. **Lição** — Implementar contra a spec também é revisá-la: lacuna
+   descoberta pela implementação vira texto normativo pelo mesmo rito de
+   qualquer emenda (revisão adversarial inclusa — que aqui pegou a
+   correção precisando de correção), nunca conhecimento tácito
+   enterrado no teste de uma das stacks.
