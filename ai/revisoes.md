@@ -562,3 +562,67 @@ incompleta, e por quê — não é um changelog de features.
    primeiro vazamento), a outra valia adiar (inútil antes da fase a que
    pertence). Aceitar recomendação de agente em bloco, sem arbitrar
    timing, teria sido tão ruim quanto ignorá-la.
+
+## 10. Testes de atomicidade do PATCH eram vácuos — passavam sem testar nada
+
+1. **Data / Fase** — 2026-07-06, fase de implementação Quarkus (camada de
+   aplicação; achado da terceira passada do `domain-guardian`, corrigido
+   antes do commit `f390ee6`).
+
+2. **O que a IA sugeriu** — A lista de testes aprovada em plan mode
+   incluía dois testes de atomicidade do PATCH (itens 16 e 37): "campo
+   válido + violação de regra no mesmo request → nada persiste". A IA os
+   implementou assim:
+
+   ```java
+   // {name: válido, status: archived} com tarefa in_progress
+   assertThrows(ProjectArchiveBlockedException.class, () ->
+       useCase.execute(id, command(ofNullable("renamed"), absent(),
+                                   ofNullable(ARCHIVED))));
+   assertEquals("p", projects.findById(id).orElseThrow().name());
+   ```
+
+   E investiu em fakes com cópias defensivas (`reconstitute` em
+   `save`/`findById`) justamente para que mutações não salvas nunca
+   vazassem pro store — a infraestrutura certa pra testar atomicidade.
+
+3. **Problema identificado** — Os dois testes eram **vácuos por ordem de
+   processamento**: o use case processa `status` *antes* dos outros
+   campos, então a exceção estourava antes de qualquer mutação válida
+   acontecer. O teste passaria mesmo com fakes sem cópia defensiva,
+   mesmo com múltiplos `save`, mesmo com atomicidade quebrada — a
+   asserção final nunca exercitava o cenário que dizia testar. Ironia
+   dupla: a IA construiu a infraestrutura de cópias defensivas correta e
+   depois escreveu os únicos testes que a justificavam numa ordem que
+   nunca a acionava. Cobertura de linha e nome do teste diziam
+   "atomicidade testada"; o mutante "remover cópia defensiva"
+   sobreviveria intacto. Foi o `domain-guardian` (terceira passada,
+   item 6 do relatório) que pegou — não a autora dos testes.
+
+4. **Correção aplicada** — Dois testes novos na direção que exercita de
+   verdade: mutação válida *primeiro* (status avança em memória), campo
+   inválido *depois* (nome em branco / título de 201 chars →
+   `IllegalArgumentException` do domínio), asserção de que o avanço de
+   status NÃO persistiu:
+
+   ```java
+   // status avança em memória; título inválido estoura depois;
+   // nada pode ter chegado ao store
+   assertThrows(IllegalArgumentException.class, () ->
+       useCase.execute(id, command(ofNullable("a".repeat(201)), absent(),
+                                   ofNullable(IN_PROGRESS), absent())));
+   assertEquals(PENDING, tasks.findById(id).orElseThrow().status());
+   ```
+
+   Os testes originais foram mantidos (cobrem a direção "regra falha
+   primeiro", que também é comportamento do contrato) — o par agora
+   cobre as duas ordens. Suíte: 70/70 verde.
+
+5. **Lição** — Teste com nome certo e asserção certa ainda pode ser
+   vácuo se o caminho até a asserção não passa pelo estado que ela
+   verifica; pra teste de atomicidade, a pergunta obrigatória é "a
+   mutação que não pode vazar chegou a *acontecer* antes do throw?".
+   Revisão de teste precisa simular a ordem de execução do código sob
+   teste, não só ler a intenção — e mutation testing (PIT, etapa
+   futura) teria pego isso mecanicamente: o mutante da cópia defensiva
+   sobreviveria aos testes originais.

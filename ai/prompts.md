@@ -689,3 +689,51 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
 4. **Resultado** — Aceito como gerado. Origem da mudança documentada em
    `ai/revisoes.md`, entrada 9 (recomendação do agente auditor com
    timing decidido pelo usuário: ArchUnit antecipado, PIT adiado).
+
+## 14. Camada de aplicação Quarkus — use cases espelhando as operações do contrato
+
+1. **Contexto** — Segundo anel do hexágono (pós-domínio, pré-adapters):
+   use cases e ports outbound em `com.taskflow.application`, com a regra
+   ArchUnit da aplicação deixando de ser vácua. Commit `f390ee6`.
+
+2. **Prompt (resumo)** — Criar a camada de aplicação: um use case por
+   operação (com a escolha UpdateProject-genérico vs ArchiveProject
+   dedicado delegada à IA pra propor), ports `ProjectRepository`/
+   `TaskRepository` como interfaces puras na própria camada de
+   aplicação. Restrições: use cases só orquestram — buscam fatos via
+   ports (ex.: `existsByProjectIdAndStatus`) e passam ao domínio,
+   conforme o desenho fatos-como-parâmetros já aprovado; nenhum use case
+   re-implementa ou pré-checa regra de negócio; ports falam tipos de
+   domínio (sem JPA, sem DTO); 404 sinalizado por exceção própria
+   mapeada depois pelo adapter REST; testes unitários com fakes em
+   memória (sem Mockito se fakes bastarem). Condição de processo: lista
+   de testes primeiro, aguardando aprovação. Rodou em plan mode.
+
+3. **O que a IA produziu** —
+   - Duas decisões estruturadas antes do plano: (a) archive dentro de
+     `UpdateProjectUseCase` — a spec não tem endpoint de arquivamento,
+     `status` é só um dos campos patcháveis, e "um use case por
+     operação" se refere a operações do contrato; (b) adição ao domínio
+     de `Task.changeStatusTo(requested, ownerStatus)` — retrocesso pra
+     `pending` não tem método de intenção, e o use case não pode lançar
+     a regra 5 sozinho; regra 6 checada primeiro mesmo pra esse alvo.
+   - Plano com lista de 41 testes aprovada em bloco via plan mode.
+   - 18 arquivos main: 9 use cases (1:1 com operationIds da spec),
+     2 ports (contrato de ordenação documentado no port, não deixado pro
+     banco), `PatchField` tri-estado (ausente / null explícito / valor —
+     `Optional` não expressa o estado do meio), 4 command records,
+     2 exceções de not-found na camada de aplicação (existência de
+     recurso é preocupação de persistência, não invariante de domínio).
+   - Fakes em memória com cópias defensivas via `reconstitute` +
+     9 classes de teste; no-op de status same-state resolvido no use
+     case (semântica de PATCH da spec, não regra de negócio); PATCH
+     atômico por construção (um único `save` no fim).
+   - `allowEmptyShould` removido da regra ArchUnit da aplicação.
+   - Auditoria (terceira passada do `domain-guardian`): sem violação de
+     arquitetura; achado real de qualidade de teste — os dois testes de
+     atomicidade eram vácuos por ordem de processamento. Corrigido antes
+     do commit; suíte final 70/70.
+
+4. **Resultado** — Aceito com uma correção pré-commit originada da
+   auditoria (testes de atomicidade vácuos) — ver `ai/revisoes.md`,
+   entrada 10. Arquitetura e desenho aceitos como propostos.

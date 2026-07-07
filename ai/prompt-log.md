@@ -956,3 +956,73 @@ testing step as planned.
 **2026-07-06 20:44**
 
 /log-ai ArchUnit como enforcement de pureza hexagonal no build
+
+---
+**2026-07-06 20:47**
+
+Create the application layer in quarkus-impl: one use case per operation
+(CreateProjectUseCase, ArchiveProjectUseCase — or a general UpdateProjectUseCase
+handling archive, propose which — CreateTaskUseCase, UpdateTaskUseCase,
+DeleteTaskUseCase, plus list/get queries), and outbound ports
+ProjectRepository/TaskRepository as plain interfaces in the application layer.
+
+Constraints:
+- Use cases orchestrate; rules stay in the domain. Use cases fetch facts via
+  ports (e.g. existsByProjectIdAndStatus(projectId, IN_PROGRESS)) and pass them
+  to domain methods, per the approved facts-as-parameters design. No use case
+  re-implements or pre-checks a business rule.
+- Ports speak domain types (ProjectId, TaskId, domain entities) — no JPA, no
+  DTOs.
+- The ArchUnit rules for ..application.. must now activate: application depends
+  on domain only, never on adapters, no framework imports.
+- 404 semantics: use cases signal not-found via a domain/application exception
+  (e.g. ProjectNotFoundException) — the REST adapter maps it later.
+
+Unit-test with in-memory fake repositories (no Mockito if fakes are simpler).
+Test list first — wait for my approval before implementing.
+
+---
+**2026-07-06 21:06**
+
+<task-notification>
+<task-id>a8acbe176e3f55398</task-id>
+<tool-use-id>toolu_01FufRtcx7Ux5mDA5iig4zZf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/bc55a1f2-997b-46e2-9383-6a70d005ee60/tasks/a8acbe176e3f55398.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit domain layer purity" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Third-pass audit complete. All 18 new main-tree files, both fakes, all 9 use-case tests, the ArchUnit test, and the Task.java amendment read. **No violations.** Findings below are minor/informational.
+
+## Checks
+
+**1. Orchestration-only — PASS.** No business rule re-implemented or pre-checked anywhere in `application/`. Only permitted logic present: same-state comparison (`UpdateProjectUseCase.java:35`, `UpdateTaskUseCase.java:35`) and 404 existence checks. `CreateTaskUseCase.java:27` delegates rule 4 to `addTask`; `DeleteTaskUseCase.java:22` delegates rule 2; `UpdateProjectUseCase.java:36-40` only dispatches to `archive()`/`activate()` intent methods.
+
+**2. Facts-as-parameters — PASS.** Rule-1 fact: `tasks.existsByProjectIdAndStatus(id, IN_PROGRESS)` at `UpdateProjectUseCase.java:37-38`. Rule-6 fact: `owner.status()` passed to `changeStatusTo` at `UpdateTaskUseCase.java:40`. Owner loaded only on actual status change — correct per spec (no-op even when archived, `UpdateTaskUseCase.java:33-35`).
+
+**3. Ports/purity — PASS.** Both ports (`ProjectRepository.java`, `TaskRepository.java`) speak domain types + `java.util` only; contract ordering documented on the port. Every application import is domain/JDK/intra-application. ArchUnit (`HexagonalArchitectureTest.java:34-40`) now enforces both layers; `archunit-junit5` 1.4.1 added to pom (`pom.xml:88-93`) — closes my second-pass gap.
+
+**4. changeStatusTo — PASS.** `Task.java:92-100`: null-check, rule 6 first (`ensureStatusChangeAllowed`, line 94), then dispatch; PENDING target throws rule-5 exception only after rule 6 passed (line 98) — precedence correct including the no-transition-method target, pinned by test `rule6WinsEvenForThePendingTargetThatHasNoTransitionMethod` (`TaskTest.java:183-188`). No rule duplication — dispatch reuses `startProgress`/`complete`. Nit: the rule-6 guard runs twice on IN_PROGRESS/DONE dispatch (line 94, then again inside line 96/97) — harmless idempotent guard, not logic duplication.
+
+**5. Orchestration order — PASS.** Load-or-404 precedes all rule evaluation in every use case; `ListTasksUseCase.java:27-29` checks project existence before filtering; both PATCH use cases mutate in memory and issue a single `save` at the end (`UpdateProjectUseCase.java:45`, `UpdateTaskUseCase.java:46`).
+
+**6. Tests/fakes — one real finding:**
+
+- **[minor] Both PATCH-atomicity tests are order-vacuous.** In `UpdateProjectUseCaseTest.patchIsAtomicWhenArchiveIsBlocked` (line 100) and `UpdateTaskUseCaseTest.patchIsAtomicWhenStatusChangeIsRejected` (line 127), the failing field (status) is processed *first* by the use case, so the "valid" field mutation never executes — these tests would pass even with a non-defensive fake or multiple saves. The fakes' defensive-copy discipline IS real (`InMemoryProjectRepository.java:28-36,47-50`, `InMemoryTaskRepository.java:26-33,59-62`), but no test currently proves it matters. Add a case where an earlier mutation succeeds and a later one fails — e.g. valid status change + oversized/blank title in the same command — and assert the status change did not land.
+- **[nit]** Untested branches: `UpdateTaskUseCase.java:37-39` orphan-task `IllegalStateException`; same-state ACTIVE→ACTIVE project patch (archived→archived is covered at `UpdateProjectUseCaseTest.java:112-124`); no combined happy-path PATCH (status + name both applied).
+- **[info]** `HexagonalArchitectureTest.java:19-24` forbids the four CLAUDE.md package roots but not `javax..`/`org.eclipse..` (my grep extras). Matches CLAUDE.md as written; add them if you want belt-and-suspenders.
+
+Everything else from the coordinator's list checks out: 9 use cases map 1:1 to spec operations, `PatchField` tri-state correctly models absent/null/value (`PatchField.java`), commands never carry `completedAt` or create-time `status` (`CreateProjectCommand.java:3`, `CreateTaskCommand.java:5`), 404 exceptions live in application (correct layer for a persistence-existence concern), and ordering-with-tie-breaker is tested for both lists (`ListProjectsUseCaseTest.java:28-36`, `ListTasksUseCaseTest.java:52-64`).
+
+Prior findings status: ArchUnit gap — resolved; PIT setup — still absent (`pom.xml` has no pitest plugin; CLAUDE.md requires mutation testing on domain+application, which is now exactly the code that exists, so it can land any time); `TaskStatusRegressionException` naming and `Instant.now()`/Clock notes — unchanged, still open.</result>
+<usage><subagent_tokens>71707</subagent_tokens><tool_uses>35</tool_uses><duration_ms>159656</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-06 21:11**
+
+/revisar (guardian found the vacuous atomicity tests I wrote; corrected pre-commit)
+
+---
+**2026-07-06 21:12**
+
+/log-ai camada de aplicação Quarkus — use cases espelhando operações do contrato, fatos via ports, fakes em memória, matriz de transições 9 células
