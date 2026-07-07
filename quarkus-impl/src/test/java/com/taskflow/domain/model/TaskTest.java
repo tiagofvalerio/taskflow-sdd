@@ -57,6 +57,7 @@ class TaskTest {
             TaskStatusRegressionException ex = assertThrows(
                     TaskStatusRegressionException.class,
                     () -> task.complete(ProjectStatus.ACTIVE));
+            assertEquals(task.id(), ex.taskId());
             assertEquals(TaskStatus.PENDING, ex.currentStatus());
             assertEquals(TaskStatus.DONE, ex.requestedStatus());
             assertEquals(TaskStatus.PENDING, task.status());
@@ -231,6 +232,7 @@ class TaskTest {
             Task task = pendingTask();
             assertThrows(IllegalArgumentException.class,
                     () -> task.changeDescription("a".repeat(2001)));
+            assertDoesNotThrow(() -> task.changeDescription("a".repeat(2000)));
             task.changeDescription(null);
             assertNull(task.description());
         }

@@ -17,6 +17,8 @@
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
         <archunit.version>1.4.1</archunit.version>
+        <pitest-maven.version>1.25.6</pitest-maven.version>
+        <pitest-junit5.version>1.2.3</pitest-junit5.version>
         <swagger-request-validator.version>2.44.9</swagger-request-validator.version>
         <!-- Matches the Testcontainers version used by the Quarkus 3.37 platform (Dev Services) -->
         <testcontainers.version>2.0.5</testcontainers.version>
@@ -152,6 +154,38 @@
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <maven.home>${maven.home}</maven.home>
                     </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <!-- Mutation testing: not bound to any lifecycle phase — run explicitly
+                 with `./mvnw test-compile pitest:mutationCoverage`. Scoped to the
+                 hexagon core (domain + application); adapters, DTOs and mappers are
+                 translation plumbing whose mutants are noise, not signal. -->
+            <plugin>
+                <groupId>org.pitest</groupId>
+                <artifactId>pitest-maven</artifactId>
+                <version>${pitest-maven.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-junit5-plugin</artifactId>
+                        <version>${pitest-junit5.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <targetClasses>
+                        <param>com.taskflow.domain.*</param>
+                        <param>com.taskflow.application.*</param>
+                    </targetClasses>
+                    <targetTests>
+                        <param>com.taskflow.domain.*</param>
+                        <param>com.taskflow.application.*</param>
+                    </targetTests>
+                    <outputFormats>
+                        <outputFormat>HTML</outputFormat>
+                        <outputFormat>XML</outputFormat>
+                    </outputFormats>
+                    <timestampedReports>false</timestampedReports>
+                    <threads>4</threads>
                 </configuration>
             </plugin>
         </plugins>

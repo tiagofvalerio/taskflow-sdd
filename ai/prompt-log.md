@@ -1555,3 +1555,34 @@ Summary: 3 blockers (1, 2, 3), 1 major (4), 3 minor (5, 6, 7). All in `/Users/ti
 **2026-07-07 17:56**
 
 /revisar a suíte de contrato revelou duas lacunas na spec congelada (não drift do código): type URI de JSON não-parseável indefinido, e forma textual de UUID sem linha normativa (o parser leniente do Java aceita "1-1-1-1-1"; um regex estrito rejeita — divergência garantida entre stacks). Decisão: promover ambas ao texto da spec via o rito de emenda (spec-reviewer em passe de confirmação), com racional no decisoes.md — testes provam conformidade ao contrato, não podem SER o contrato. Lição: implementar contra a spec também é revisá-la; lacunas descobertas viram texto normativo, não conhecimento tácito no teste.
+
+---
+**2026-07-07 18:00**
+
+Add PIT (pitest) to the Maven build for quarkus-impl, scoped ONLY to the
+domain and application packages (targetClasses) — adapters, DTOs, mappers and
+generated code excluded: mutating translation plumbing produces noise, not
+signal. Use pitest-maven with the pitest-junit5-plugin; verify current
+versions and compatibility with our JUnit/Java level before wiring, tell me
+what you find. Bind it to a dedicated profile or goal (mvn pitest:mutationCoverage),
+NOT the default test phase — mutation runs are slow and shouldn't tax every build.
+
+Run it and report: mutation score for domain and application, and the full
+list of surviving mutants with file/line/mutator.
+
+---
+**2026-07-07 18:10**
+
+For each surviving mutant: propose either (a) a test that kills it, or
+(b) an argument that it's an equivalent mutant (behaviorally indistinguishable).
+One by one — I decide each.
+
+---
+**2026-07-07 18:18**
+
+/revisar testes de mutação sobreviventes do PIT: resolvidos fechando o apontamento do guardian da fase de domínio; score final 100%
+
+---
+**2026-07-07 18:20**
+
+/log-ai PIT no domínio+aplicação Quarkus — score 100%, sobreviventes triados um a um

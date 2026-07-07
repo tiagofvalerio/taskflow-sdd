@@ -28,6 +28,7 @@ class ProjectTest {
 
             assertNotNull(project.id());
             assertEquals(ProjectStatus.ACTIVE, project.status());
+            assertFalse(project.isArchived());
             assertEquals("Taskflow", project.name());
             assertEquals("challenge project", project.description());
             assertFalse(project.createdAt().isBefore(before));

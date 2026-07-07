@@ -830,3 +830,53 @@ incompleta, e por quê — não é um changelog de features.
    qualquer emenda (revisão adversarial inclusa — que aqui pegou a
    correção precisando de correção), nunca conhecimento tácito
    enterrado no teste de uma das stacks.
+
+## 15. Cinco mutantes sobreviventes do PIT — testes com asserção unilateral, fechando o apontamento do guardian
+
+1. **Data / Fase** — 2026-07-07, fase de testes de mutação do
+   `quarkus-impl` (pitest-maven 1.25.6 + pitest-junit5-plugin 1.2.3,
+   escopo domain + application). Fecha o apontamento do guardian da
+   fase de domínio.
+
+2. **O que a IA sugeriu** — Os testes de domínio e application escritos
+   nas fases anteriores pela própria IA: 99% de cobertura de linha,
+   53 testes, aparência de suíte completa. Primeira rodada do PIT:
+   95% de score de mutação (96/101), 3 sobreviventes + 2 sem cobertura.
+
+3. **Problema identificado** — Os cinco mutantes expuseram o mesmo
+   defeito estrutural: asserção unilateral. Cobertura de linha alta
+   mascarava testes que só olhavam um lado do comportamento:
+
+   - `Task.validDescription` — teste rejeitava 2001 chars mas nunca
+     aceitava 2000; o teste irmão de `title` tinha os dois lados
+     (201 rejeita + 200 aceita). Inconsistência do mesmo gerador no
+     mesmo arquivo: mutante de fronteira (`>` → `>=`) sobreviveu só
+     na description.
+   - `Project.isArchived` — só `assertTrue` após arquivar; `return
+     true` forçado passava. Nunca asserido `false` em projeto ativo.
+   - `UpdateTaskUseCase.execute` — todos os testes descartavam o
+     retorno e re-liam o repositório; `return null` sobrevivia, embora
+     o retorno alimente o corpo da resposta 200 no adapter.
+   - Guard de projeto ausente (`orElseThrow` com `IllegalStateException`)
+     — caminho nunca exercitado por nenhum teste.
+   - `TaskStatusRegressionException.taskId()` — acessor sem nenhum
+     chamador em produção nem em teste, ao contrário dos irmãos
+     (`currentStatus()`/`requestedStatus()` eram asseridos).
+
+4. **Correção aplicada** — Decisão mutante a mutante (humano decidiu
+   cada um; todos → matar, nenhum aceito como equivalente): linha de
+   aceitação no limite exato de 2000; `assertFalse(isArchived())` no
+   teste de criação; captura e asserção do retorno do use case; teste
+   novo de tarefa órfã esperando `IllegalStateException`; asserção de
+   `taskId()` no bloco existente de regressão. Segunda rodada:
+   **100% (101/101), zero sobreviventes, zero sem cobertura**. Para o
+   quinto mutante a alternativa honesta era deletar o acessor morto —
+   mantido por simetria com as exceções irmãs, mas registrado que o
+   argumento "mutante equivalente" ali seria na verdade argumento de
+   código morto.
+
+5. **Lição** — Cobertura de linha mede execução, não verificação: a IA
+   gera com facilidade testes que executam os dois lados de uma regra
+   mas asserem só um; mutação é o instrumento que torna essa assimetria
+   visível e barata de corrigir — rodá-la é fechar o ciclo que o
+   guardian só consegue apontar.

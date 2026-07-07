@@ -55,10 +55,11 @@ class UpdateTaskUseCaseTest {
     @Test
     void editsNonStatusFieldsIncludingExplicitNullDescription() {
         Task stored = storedTask(storedProject(ProjectStatus.ACTIVE), TaskStatus.PENDING);
-        useCase.execute(stored.id(), command(
+        Task returned = useCase.execute(stored.id(), command(
                 PatchField.ofNullable("new title"), PatchField.ofNullable(null),
                 PatchField.absent(), PatchField.ofNullable(TaskPriority.HIGH)));
 
+        assertEquals("new title", returned.title());
         Task reloaded = tasks.findById(stored.id()).orElseThrow();
         assertEquals("new title", reloaded.title());
         assertNull(reloaded.description());
@@ -88,6 +89,13 @@ class UpdateTaskUseCaseTest {
         Task done = storedTask(storedProject(ProjectStatus.ACTIVE), TaskStatus.DONE);
         assertThrows(TaskStatusRegressionException.class,
                 () -> useCase.execute(done.id(), statusOnly(TaskStatus.PENDING)));
+    }
+
+    @Test
+    void statusChangeFailsFastWhenOwnerProjectIsMissing() {
+        Task orphan = storedTask(ProjectId.newId(), TaskStatus.PENDING);
+        assertThrows(IllegalStateException.class,
+                () -> useCase.execute(orphan.id(), statusOnly(TaskStatus.IN_PROGRESS)));
     }
 
     @Test

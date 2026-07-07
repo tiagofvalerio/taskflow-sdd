@@ -901,3 +901,49 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    decisão do usuário sobre achado de sobre-especificação da matriz, com
    a adição de documentá-la na própria suíte. Suíte completa: 156/156
    no `./mvnw verify`.
+
+## 18. Testes de mutação — PIT no domínio+aplicação do Quarkus
+
+1. **Contexto** — PIT no domínio+aplicação Quarkus — score 100%,
+   sobreviventes triados um a um. Fase de qualidade de testes do
+   `quarkus-impl`, fechando o apontamento do guardian da fase de
+   domínio.
+
+2. **Prompt (resumo)** — Dois prompts encadeados: (1) adicionar
+   pitest-maven ao build, escopado SÓ a `domain` + `application`
+   (adapters/DTOs/mappers fora — mutar plumbing de tradução é ruído);
+   verificar versões atuais e compatibilidade com nosso nível de
+   JUnit/Java antes de fiar; vincular a goal dedicado
+   (`pitest:mutationCoverage`), nunca à fase de teste padrão; rodar e
+   reportar score + lista completa de sobreviventes com
+   arquivo/linha/mutador. (2) Para cada sobrevivente, propor teste que
+   mata OU argumento de mutante equivalente — um a um, decisão humana
+   em cada.
+
+3. **O que a IA produziu** —
+   - Verificação de versões antes de fiar: pitest-maven 1.25.6
+     (lançado no mesmo dia; ASM 9.10.1 → class files Java 25;
+     auto-desliga extensão jacoco do Quarkus) + pitest-junit5-plugin
+     1.2.3. Achado relevante: Quarkus 3.37 traz JUnit Jupiter 6.1.1 e
+     o plugin documenta só platform ≤1.10 — compatibilidade com JUnit 6
+     confirmada empiricamente na primeira rodada (53 testes
+     descobertos, 144 execuções sob mutação).
+   - `quarkus-impl/pom.xml`: plugin declarado sem binding de lifecycle
+     (só invocação explícita), `targetClasses`/`targetTests` em
+     `com.taskflow.domain.*` + `com.taskflow.application.*` —
+     @QuarkusTest/Testcontainers e ArchUnit fora do loop de mutação.
+     Rodada completa: 8 segundos.
+   - Primeira rodada: 95% (96/101), domínio 95,1%, application 95,0%;
+     5 não-mortos extraídos do XML com arquivo/linha/mutador.
+   - Triagem um a um via pergunta estruturada (humano decidiu os 5):
+     todos mortos com mudanças cirúrgicas em `TaskTest`, `ProjectTest`
+     e `UpdateTaskUseCaseTest` (1 teste novo, 4 asserções adicionadas).
+     Nenhum aceito como equivalente — para `taskId()` a IA explicitou
+     que o argumento de equivalência seria na verdade código morto.
+   - Segunda rodada: **100% (101/101), zero sobreviventes, zero sem
+     cobertura**.
+
+4. **Resultado** — Aceito. Os 5 sobreviventes eram lacunas dos testes
+   gerados pela própria IA em fases anteriores (asserção unilateral
+   mascarada por 99% de cobertura de linha) — análise honesta em
+   `ai/revisoes.md`, entrada 15.
