@@ -737,3 +737,65 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
 4. **Resultado** — Aceito com uma correção pré-commit originada da
    auditoria (testes de atomicidade vácuos) — ver `ai/revisoes.md`,
    entrada 10. Arquitetura e desenho aceitos como propostos.
+
+## 15. Adapters — persistência e REST com taxonomia de erros completa
+
+1. **Contexto** — Fechamento do hexágono Quarkus: adapter de persistência
+   (JPA/Panache implementando os ports) e adapter REST implementando
+   `spec/openapi.yaml` exatamente, com a taxonomia RFC 7807 completa.
+   Commits `c317388` (persistência) e `188435c` (REST).
+
+2. **Prompt (resumo)** — Três blocos: (1) persistência com entidades JPA
+   separadas do domínio, repositórios Panache implementando os ports,
+   mappers com wrap/unwrap dos ids tipados, escolha Flyway-vs-Hibernate
+   delegada à IA com justificativa de uma linha, colunas espelhando
+   invariantes, ordenação obrigatória `createdAt ASC, id ASC`;
+   (2) REST com paths em português, DTOs espelhando o split
+   request/response da spec, campos desconhecidos rejeitados, 201 com
+   Location, datetimes UTC com `Z`; (3) mapeamento de erros com a
+   taxonomia e precedência COMPLETAS da spec (6 regras → 422 com type
+   próprio, 404, três categorias de 400 com fail-fast
+   path→query→body). Condição de processo: plano com layout de arquivos
+   e tabela exceção→status→type URI antes de código. Escopo de teste
+   decidido em pergunta estruturada: integração + taxonomia agora,
+   suíte de contrato OpenAPI como passo seguinte.
+
+3. **O que a IA produziu** —
+   - **Flyway** (justificativa: schema é artefato revisado e explícito —
+     invariantes como colunas/checks — não efeito colateral de anotação).
+     `V1__initial_schema.sql` com checks de enum, non-blank e
+     `(status='done') = (completed_at is not null)`.
+   - Persistência: entidades com enums como String minúscula (valores de
+     fio), mappers via `reconstitute`, repos Panache com
+     `Sort.by("createdAt").and("id")` e `existsByProjectIdAndStatus`
+     (fato da regra 1). Hibernate em modo `validate`.
+   - REST: 3 resources (transações no adapter, `Location` relativo
+     setado manualmente — `Response.created()` resolveria pra URL
+     absoluta); DTOs com `@JsonAnySetter` coletando campos
+     desconhecidos (Jackson fail-on-unknown aborta no primeiro campo; a
+     spec exige reportar todos de uma vez) e setters registrando
+     presença → `PatchField` tri-estado reutilizado da aplicação.
+   - Precedência: `ContainerRequestFilter` validando UUID do path ANTES
+     da desserialização do corpo (JAX-RS leria o corpo primeiro);
+     regex canônica em vez de `UUID.fromString`, que aceita formas como
+     `1-1-1-1-1`; query fail-fast status→priority em código; dois
+     formatos de erro de path (plain vs `errors[]`) conforme os dois
+     exemplos da spec. `ExceptionMapper` com switch exaustivo sobre a
+     sealed `DomainRuleViolationException`.
+   - Nota registrada no plano: o prompt pedia "404 por recurso com type
+     próprio", mas a spec congelada define UM type compartilhado
+     (`resource-not-found`) com `detail` por recurso — spec venceu.
+   - Testes: 12 de persistência (Testcontainers/Dev Services, incluindo
+     smoke de constraint no banco) + 35 REST (happy paths +
+     `ErrorTaxonomyTest`: um teste por linha da tabela + precedências).
+     Suíte 117/117.
+   - Correção no caminho (própria IA): classes `*IT` não rodavam
+     (surefire só pega `*Test`, `skipITs=true`) — renomeadas; e 2 testes
+     de persistência quebraram ao compartilhar o banco Dev Services com
+     os testes REST (asserções de lista exata vs dados commitados) —
+     limpeza de tabelas em `@BeforeEach`.
+
+4. **Resultado** — Aceito como gerado (2 correções de infraestrutura de
+   teste feitas pela própria IA antes do commit, descritas acima; sem
+   intervenção do usuário no código). Auditoria do `domain-guardian`
+   sobre os adapters em andamento ao registrar esta entrada.

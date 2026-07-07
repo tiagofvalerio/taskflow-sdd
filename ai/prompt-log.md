@@ -1026,3 +1026,115 @@ Prior findings status: ArchUnit gap — resolved; PIT setup — still absent (`p
 **2026-07-06 21:12**
 
 /log-ai camada de aplicação Quarkus — use cases espelhando operações do contrato, fatos via ports, fakes em memória, matriz de transições 9 células
+
+---
+**2026-07-06 21:14**
+
+Now the adapters for quarkus-impl:
+
+1. adapters/out/persistence: JPA entities (separate classes from domain),
+   Panache repositories implementing the application ports, mappers
+   domain<->JPA (ProjectId/TaskId wrap/unwrap at this boundary). Schema:
+   Flyway or Hibernate generation — your call, justify in one line. Columns
+   mirror invariants (not null, length limits). List queries MUST order by
+   createdAt ASC, id ASC (spec ordering guarantee).
+
+2. adapters/in/rest: JAX-RS resources implementing spec/openapi.yaml EXACTLY —
+   Portuguese paths (/projetos, /tarefas), DTOs mirroring the spec's
+   request/response schema split (CreateProjectRequest, UpdateTaskRequest,
+   etc.; unknown fields in request bodies rejected), 201s with required
+   Location header, datetimes serialized UTC with Z suffix.
+
+3. Error mapping implementing the spec's FULL taxonomy and precedence:
+   - each domain exception -> its exact 422 type URI (6 rules)
+   - not-found exceptions -> 404 per-resource type URIs
+   - 400s by context with their distinct type URIs: invalid path param,
+     invalid query param, invalid request body (ValidationProblemDetails with
+     all field errors; the other two plain ProblemDetails, fail-fast
+     path->query->body per spec)
+   - Bean Validation for syntactic rules; media type application/problem+json
+     on all errors.
+
+Plan first: show me the file layout and the exception-mapping table
+(exception -> status -> type URI) before writing code.
+
+---
+**2026-07-06 21:14**
+
+Now the adapters for quarkus-impl:
+
+1. adapters/out/persistence: JPA entities (separate classes from domain),
+   Panache repositories implementing the application ports, mappers
+   domain<->JPA (ProjectId/TaskId wrap/unwrap at this boundary). Schema:
+   Flyway or Hibernate generation — your call, justify in one line. Columns
+   mirror invariants (not null, length limits). List queries MUST order by
+   createdAt ASC, id ASC (spec ordering guarantee).
+
+2. adapters/in/rest: JAX-RS resources implementing spec/openapi.yaml EXACTLY —
+   Portuguese paths (/projetos, /tarefas), DTOs mirroring the spec's
+   request/response schema split (CreateProjectRequest, UpdateTaskRequest,
+   etc.; unknown fields in request bodies rejected), 201s with required
+   Location header, datetimes serialized UTC with Z suffix.
+
+3. Error mapping implementing the spec's FULL taxonomy and precedence:
+   - each domain exception -> its exact 422 type URI (6 rules)
+   - not-found exceptions -> 404 per-resource type URIs
+   - 400s by context with their distinct type URIs: invalid path param,
+     invalid query param, invalid request body (ValidationProblemDetails with
+     all field errors; the other two plain ProblemDetails, fail-fast
+     path->query->body per spec)
+   - Bean Validation for syntactic rules; media type application/problem+json
+     on all errors.
+
+Plan first: show me the file layout and the exception-mapping table
+(exception -> status -> type URI) before writing code.
+
+---
+**2026-07-07 01:54**
+
+continue
+
+---
+**2026-07-07 02:00**
+
+/log-ai adapters — persistência e REST com taxonomia de erros completa
+
+---
+**2026-07-07 02:04**
+
+<task-notification>
+<task-id>a8acbe176e3f55398</task-id>
+<tool-use-id>toolu_01BB2PfCCCBoQ2K6AhzdWX4g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/bc55a1f2-997b-46e2-9383-6a70d005ee60/tasks/a8acbe176e3f55398.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit domain layer purity" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fourth-pass audit complete. Read all 27 adapter sources, the migration, properties, and all 6 adapter test classes. **One major finding, a few minors — everything else clean.**
+
+## Findings
+
+**[major] No exception mapper for Jackson deserialization failures — RFC 7807 hole.** `/Users/tiagofvalerio/Development/taskflow-sdd/quarkus-impl/src/main/java/com/taskflow/adapter/in/rest/error/ErrorMappers.java` maps the 6 custom exceptions only. A syntactically malformed JSON body (`{invalid`), a non-object body (`"x"`, `[1]`), or a wrong-shaped field value (`"name": {"a":1}` → `MismatchedInputException`; string fields dodge most cases via Jackson's number-to-string coercion, but objects/arrays throw) is handled by Quarkus REST's default handler — a 400 that is neither `invalid-request-body` nor `application/problem+json`, violating CLAUDE.md's "all error responses use RFC 7807". No test covers malformed JSON either (ErrorTaxonomyTest's body section starts from parseable JSON). Fix: an `ExceptionMapper` for `com.fasterxml.jackson.core.JacksonException` (or Quarkus REST's `ProcessingException` wrapper) that emits the `invalid-request-body` shape, plus a test. Same class of gap applies to 415 (wrong Content-Type) if the spec's blanket-7807 rule is read strictly.
+
+**[minor] UUID tie-break collation divergence between fakes and Postgres.** `ProjectPanacheRepository.java:21` / `TaskPanacheRepository.java:24` order by the `uuid` column — Postgres compares uuids as unsigned bytes. The in-memory fakes (`InMemoryProjectRepository.java:21-23`, `InMemoryTaskRepository.java:19-21`) use Java `UUID.compareTo`, which compares signed 64-bit halves and disagrees with Postgres whenever the high bit differs. All current tests use low-valued ids so both agree; with random UUIDs sharing a createdAt, application-layer tests and the real adapter can order differently. Align the fake comparator (e.g. compare `toString()` or unsigned longs).
+
+**[nit]** `UuidPathParamFilter.java:33-35` selects the error shape by HTTP method (POST/PATCH → `errors[]`); correct for every current route, but the mapping is positional — a comment or per-route check would future-proof it. Also ErrorTaxonomyTest covers rule-5 skip-ahead at REST level but not backward-move (covered at domain/application; fine).
+
+## Clean checks
+
+1. **No rule leakage** — DTOs validate only syntax (blank/length/enum membership/unknown/read-only/empty-patch: `CreateProjectRequest.java:32-53`, `UpdateTaskRequest.java:53-95`); resources only translate + delegate; `completedAt` is a readOnly 400 via `BodyValidation.READ_ONLY_FIELDS` (`BodyValidation.java:50-51`) and is deliberately not a DTO property (`UpdateTaskRequest.java:18-22`). No status/archived conditional anywhere in the ring.
+2. **Error taxonomy** — all 9 type URIs match spec lines 866-1039 exactly; every PT title/detail string is verbatim to the spec examples (checked all of `ErrorMappers.java` against spec lines 862-1042); `problem+json` set centrally (`ErrorMappers.java:43,52`); both path-param shapes implemented (`InvalidPathParamMapper`, `ErrorMappers.java:140-146`) and tested (`ErrorTaxonomyTest.java:143-172`); sealed-switch `DomainRuleMapper` is compiler-exhaustive over the 5 rule exceptions.
+3. **Precedence wiring** — `UuidPathParamFilter` is a post-matching `ContainerRequestFilter`, which runs before body deserialization; canonical-form regex correctly rejects `1-1-1-1-1` (tested, `ErrorTaxonomyTest.java:167-172`); query order status→priority enforced by call order (`ProjectTasksResource.java:60-61`) and tested (`bothFiltersInvalidReportsOnlyStatus`); no route bypasses the filter (all path params are named `id`). Full 400→404→422, rule-6-over-rule-5, and no-op-beats-rule-6 chains tested (`ErrorTaxonomyTest.java:274-347`).
+4. **Persistence** — mappers reconstitute at the boundary with lowercase wire values both directions; round-trip fidelity tested incl. `completedAt` and null description; `Sort.by("createdAt").and("id")` matches the port/spec contract and is DB-tested with a tie-break; merge-based save covers insert+update (tested, `ProjectPersistenceTest.java:72-82`); entity columns/lengths/nullability match `V1__initial_schema.sql` exactly, incl. the `(status='done') = (completed_at is not null)` CHECK (DB-tested, `TaskPersistenceTest.java:150-157`); `application.properties` — Flyway owns schema, Hibernate `validate` only.
+5. **Response conformance** — Location built manually as relative uri-reference and asserted by exact string equality in all three resource tests; `Z`-suffix asserted; `completedAt` explicit-null emission (no `@JsonInclude` on `TaskResponse`, asserted `nullValue()`); response field names/types mirror spec schemas.
+6. **Boundaries** — no in↔out adapter imports; `UseCaseConfig` wires use cases through ports only; domain/application untouched since a1e6e5d (ArchUnit rules still in place; DTO→application-command and DTO→domain-enum imports are legal inward dependencies).
+
+Open from earlier passes: PIT setup still absent from `pom.xml`; the order-vacuous PATCH-atomicity tests in the application layer; `TaskStatusRegressionException` naming nit.
+
+Per CLAUDE.md: significant audit of generated code — remember `/log-ai`, and `/revisar` if you act on the Jackson-mapper finding.</result>
+<usage><subagent_tokens>132309</subagent_tokens><tool_uses>100</tool_uses><duration_ms>244913</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-07 02:12**
+
+/revisar

@@ -626,3 +626,57 @@ incompleta, e por quê — não é um changelog de features.
    teste, não só ler a intenção — e mutation testing (PIT, etapa
    futura) teria pego isso mecanicamente: o mutante da cópia defensiva
    sobreviveria aos testes originais.
+
+## 11. Taxonomia RFC 7807 tinha um buraco: erros do Jackson escapavam do contrato
+
+1. **Data / Fase** — 2026-07-07, fase de implementação Quarkus (adapters;
+   achado [major] da quarta passada do `domain-guardian`, corrigido em
+   `414b39e` sobre os commits `c317388`/`188435c`).
+
+2. **O que a IA sugeriu** — O adapter REST implementou a taxonomia de
+   erros completa da spec: 9 type URIs, precedência 400→404→422,
+   fail-fast path→query→body, `application/problem+json` em todo erro —
+   e o `ErrorTaxonomyTest` cobria um teste por linha da tabela de
+   mapeamento. Todos os `ExceptionMapper` registrados, porém, cobriam
+   apenas as exceções *do próprio projeto* (domínio, aplicação e as três
+   do adapter). Todos os testes de corpo inválido partiam de JSON
+   *sintaticamente válido*.
+
+3. **Problema identificado** — Corpo com JSON malformado (`{invalid`),
+   corpo não-objeto ou valor de campo com formato errado
+   (`"name": {"a":1}`) nunca chegavam aos mappers do projeto: caíam no
+   tratamento default do framework — um `400` de texto puro (ou vazio),
+   sem `type`, sem `application/problem+json` — violando o requisito
+   não-negociável do `CLAUDE.md` de que TODO erro é RFC 7807. O buraco
+   era invisível à suíte porque nenhum teste enviava JSON quebrado: a
+   IA testou exaustivamente a taxonomia que *escreveu*, não o espaço de
+   entradas que o contrato *promete cobrir*. Mesma classe de cegueira da
+   lição da entrada 9 do processo de spec ("o que nunca foi escrito"),
+   agora em código. Achado pelo agente auditor, não pela autora.
+
+4. **Correção aplicada** — Três mappers novos, e a correção exigiu
+   engenharia reversa do framework (decompilação de
+   `RequestDeserializeHandler` e do `quarkus-rest-jackson`) porque as
+   duas primeiras tentativas falharam por motivos distintos e
+   não-óbvios: (a) um mapper genérico para `JacksonException` perdia
+   para o `BuiltinMismatchedInputExceptionMapper` do Quarkus, mais
+   específico na hierarquia de tipos — resolvido com um mapper próprio
+   exatamente para `MismatchedInputException`, que desempata a
+   especificidade a favor do projeto; (b) JSON malformado nem sequer
+   carrega a causa: o framework lança `WebApplicationException(400)`
+   *sem corpo e sem cause* — resolvido com um mapper de
+   `WebApplicationException` que converte apenas a assinatura exata
+   (400 + sem entity, ou cause Jackson) e deixa 404/405/415 passarem
+   intactos. Dois testes novos no `ErrorTaxonomyTest` (JSON malformado,
+   valor de campo com shape errado). No mesmo commit, o achado [minor]:
+   desempate de ordenação nos fakes usava `UUID.compareTo` (comparação
+   com sinal), que diverge da ordem unsigned de bytes do Postgres —
+   fakes agora comparam a string hex canônica. Suíte 119/119.
+
+5. **Lição** — Testar a taxonomia de erros que você escreveu não é
+   testar o contrato de erros: os caminhos de erro que o *framework*
+   gera (parse, negociação de mídia, binding) fazem parte da superfície
+   observável da API e precisam de teste e mapeamento explícitos — e
+   integrar com o comportamento default de um framework às vezes exige
+   ler o código dele, não a documentação; a IA fez isso sozinha, mas só
+   depois que o auditor apontou o buraco.

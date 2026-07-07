@@ -18,9 +18,11 @@ import java.util.Optional;
  */
 public final class InMemoryProjectRepository implements ProjectRepository {
 
+    // Tie-break compares the canonical hex string, matching Postgres's
+    // unsigned-byte uuid order — UUID.compareTo is signed and can disagree.
     private static final Comparator<Project> CONTRACT_ORDER =
             Comparator.comparing(Project::createdAt)
-                    .thenComparing(project -> project.id().value());
+                    .thenComparing(project -> project.id().value().toString());
 
     private final Map<ProjectId, Project> store = new HashMap<>();
 

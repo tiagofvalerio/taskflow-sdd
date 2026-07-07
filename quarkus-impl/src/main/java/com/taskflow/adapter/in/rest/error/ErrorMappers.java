@@ -1,6 +1,10 @@
 package com.taskflow.adapter.in.rest.error;
 
+import com.fasterxml.jackson.core.JacksonException;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.taskflow.adapter.in.rest.validation.InvalidPathParamException;
+import jakarta.ws.rs.WebApplicationException;
 import com.taskflow.adapter.in.rest.validation.InvalidQueryParamException;
 import com.taskflow.adapter.in.rest.validation.InvalidRequestBodyException;
 import com.taskflow.application.exception.ProjectNotFoundException;
@@ -156,6 +160,86 @@ public final class ErrorMappers {
         public Response toResponse(InvalidQueryParamException exception) {
             return problem(400, "invalid-query-parameter", "Parâmetro de query inválido",
                     exception.detail(), uriInfo);
+        }
+    }
+
+    /**
+     * Jackson failures would otherwise escape the RFC 7807 taxonomy: the
+     * framework wraps parse errors (malformed JSON) in a bodyless
+     * BadRequestException, and quarkus-rest-jackson ships a builtin mapper
+     * for MismatchedInputException (wrong-shaped field values) that emits
+     * plain application/json. Three mappers close both holes — the
+     * MismatchedInputException one exists solely to out-rank the builtin by
+     * type specificity.
+     */
+    private static Response jacksonProblem(JacksonException exception, UriInfo uriInfo) {
+        String field = "body";
+        if (exception instanceof JsonMappingException mapping && !mapping.getPath().isEmpty()) {
+            String path = mapping.getPath().stream()
+                    .map(JsonMappingException.Reference::getFieldName)
+                    .filter(name -> name != null && !name.isBlank())
+                    .reduce((a, b) -> a + "." + b)
+                    .orElse("");
+            if (!path.isEmpty()) {
+                field = path;
+            }
+        }
+        return validationProblem("invalid-request-body", "Corpo da requisição inválido",
+                "O corpo da requisição não é um JSON válido ou contém um valor de tipo inválido.",
+                List.of(new FieldError(field, "JSON malformado ou tipo de valor inválido")),
+                uriInfo);
+    }
+
+    @Provider
+    public static class JacksonFailureMapper implements ExceptionMapper<JacksonException> {
+
+        @Context
+        UriInfo uriInfo;
+
+        @Override
+        public Response toResponse(JacksonException exception) {
+            return jacksonProblem(exception, uriInfo);
+        }
+    }
+
+    @Provider
+    public static class MismatchedInputMapper implements ExceptionMapper<MismatchedInputException> {
+
+        @Context
+        UriInfo uriInfo;
+
+        @Override
+        public Response toResponse(MismatchedInputException exception) {
+            return jacksonProblem(exception, uriInfo);
+        }
+    }
+
+    /**
+     * The framework signals a malformed JSON body either as
+     * BadRequestException(cause) or as a bare, bodyless
+     * WebApplicationException(400) with no cause — both must become the
+     * invalid-request-body problem. Anything else (404 for unmatched routes,
+     * 405, 415, ...) passes through with the framework's own response.
+     */
+    @Provider
+    public static class FrameworkBadRequestMapper implements ExceptionMapper<WebApplicationException> {
+
+        @Context
+        UriInfo uriInfo;
+
+        @Override
+        public Response toResponse(WebApplicationException exception) {
+            if (exception.getCause() instanceof JacksonException jackson) {
+                return jacksonProblem(jackson, uriInfo);
+            }
+            Response original = exception.getResponse();
+            if (original.getStatus() == 400 && !original.hasEntity()) {
+                return validationProblem("invalid-request-body",
+                        "Corpo da requisição inválido",
+                        "O corpo da requisição não é um JSON válido.",
+                        List.of(new FieldError("body", "JSON malformado")), uriInfo);
+            }
+            return original;
         }
     }
 

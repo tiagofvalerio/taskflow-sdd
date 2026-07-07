@@ -257,6 +257,28 @@ class ErrorTaxonomyTest {
         }
 
         @Test
+        void malformedJsonIsStillProblemJson() {
+            given().contentType(ContentType.JSON)
+                    .body("{invalid")
+                    .post("/projetos")
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-request-body"));
+        }
+
+        @Test
+        void wrongShapedFieldValueIsStillProblemJson() {
+            given().contentType(ContentType.JSON)
+                    .body("{\"name\": {\"nested\": true}}")
+                    .post("/projetos")
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-request-body"));
+        }
+
+        @Test
         void emptyPatchBodyRejected() {
             String projectId = createProject("p");
             given().contentType(ContentType.JSON)
