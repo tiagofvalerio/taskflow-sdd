@@ -4,6 +4,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static com.taskflow.adapter.in.rest.RestTestSupport.archiveProject;
@@ -17,9 +18,10 @@ import static org.hamcrest.Matchers.matchesRegex;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
-class ProjectResourceTest {
+class ProjectResourceTest extends SpecValidatedRestTest {
 
     @Test
     void createReturns201WithRelativeLocationAndZSuffixedCreatedAt() {
@@ -64,6 +66,53 @@ class ProjectResourceTest {
                 .then().statusCode(200)
                 .body("id", hasItems(archivedId))
                 .body("id", not(hasItems(activeId)));
+    }
+
+    @Test
+    void createWithNullDescriptionReturns201() {
+        given().contentType(ContentType.JSON)
+                .body("{\"name\": \"sem descrição\", \"description\": null}")
+                .post("/projetos")
+                .then()
+                .statusCode(201)
+                .body("name", equalTo("sem descrição"))
+                .body("description", nullValue());
+    }
+
+    @Test
+    void listOrdersByCreatedAtAscending() {
+        String first = createProject("ordem 1");
+        String second = createProject("ordem 2");
+        String third = createProject("ordem 3");
+
+        List<String> ids = given().get("/projetos")
+                .then().statusCode(200)
+                .extract().jsonPath().getList("id", String.class);
+
+        assertTrue(ids.indexOf(first) < ids.indexOf(second));
+        assertTrue(ids.indexOf(second) < ids.indexOf(third));
+    }
+
+    @Test
+    void unrecognizedQueryParamIsIgnored() {
+        String id = createProject("tolerante");
+        given().queryParam("foo", "bar").get("/projetos")
+                .then().statusCode(200)
+                .body("id", hasItems(id));
+    }
+
+    @Test
+    void sameStateStatusNoOpAppliesSiblingField() {
+        // Spec's own worked example: {"status": "active", "name": "New Name"}
+        // on an already-active project updates name, leaves status untouched.
+        String id = createProject("antes do no-op");
+        given().contentType(ContentType.JSON)
+                .body(Map.of("status", "active", "name", "New Name"))
+                .patch("/projetos/{id}", id)
+                .then()
+                .statusCode(200)
+                .body("name", equalTo("New Name"))
+                .body("status", equalTo("active"));
     }
 
     @Test

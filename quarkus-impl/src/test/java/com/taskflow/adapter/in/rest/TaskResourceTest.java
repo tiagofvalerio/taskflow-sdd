@@ -15,7 +15,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.nullValue;
 
 @QuarkusTest
-class TaskResourceTest {
+class TaskResourceTest extends SpecValidatedRestTest {
 
     @Test
     void getReturnsTask() {

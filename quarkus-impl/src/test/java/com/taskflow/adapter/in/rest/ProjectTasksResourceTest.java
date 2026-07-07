@@ -10,6 +10,7 @@ import static com.taskflow.adapter.in.rest.RestTestSupport.createProject;
 import static com.taskflow.adapter.in.rest.RestTestSupport.createTask;
 import static com.taskflow.adapter.in.rest.RestTestSupport.patchTaskStatus;
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItems;
@@ -18,7 +19,7 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
-class ProjectTasksResourceTest {
+class ProjectTasksResourceTest extends SpecValidatedRestTest {
 
     @Test
     void createReturns201WithRelativeLocationAndPendingStatus() {
@@ -37,6 +38,29 @@ class ProjectTasksResourceTest {
                 .extract();
 
         assertEquals("/tarefas/" + response.path("id"), response.header("Location"));
+    }
+
+    @Test
+    void listOrdersByCreatedAtAscending() {
+        String projectId = createProject("ordenação");
+        String first = createTask(projectId, "primeira", "low");
+        String second = createTask(projectId, "segunda", "medium");
+        String third = createTask(projectId, "terceira", "high");
+
+        given().get("/projetos/{id}/tarefas", projectId)
+                .then().statusCode(200)
+                .body("id", contains(first, second, third));
+    }
+
+    @Test
+    void unrecognizedQueryParamIsIgnored() {
+        String projectId = createProject("tolerante");
+        String taskId = createTask(projectId, "t", "low");
+
+        given().queryParam("foo", "bar")
+                .get("/projetos/{id}/tarefas", projectId)
+                .then().statusCode(200)
+                .body("id", hasItems(taskId));
     }
 
     @Test
