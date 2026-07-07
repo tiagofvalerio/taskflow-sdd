@@ -257,6 +257,33 @@ class ErrorTaxonomyTest {
         }
 
         @Test
+        void numberWhereStringExpectedIsRejectedNamingTheField() {
+            given().contentType(ContentType.JSON)
+                    .body("{\"name\": 123}")
+                    .post("/projetos")
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-request-body"))
+                    .body("errors[0].field", equalTo("name"));
+        }
+
+        @Test
+        void numberWhereEnumStringExpectedIsRejectedNamingTheField() {
+            String projectId = createProject("p");
+            String taskId = createTask(projectId, "t", "low");
+
+            given().contentType(ContentType.JSON)
+                    .body("{\"priority\": 1}")
+                    .patch("/tarefas/{id}", taskId)
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-request-body"))
+                    .body("errors[0].field", equalTo("priority"));
+        }
+
+        @Test
         void malformedJsonIsStillProblemJson() {
             given().contentType(ContentType.JSON)
                     .body("{invalid")
