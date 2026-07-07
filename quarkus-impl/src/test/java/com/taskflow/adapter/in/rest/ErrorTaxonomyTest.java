@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -349,6 +350,17 @@ class ErrorTaxonomyTest extends SpecValidatedRestTest {
                     .statusCode(400)
                     .body("type", equalTo(ERR + "invalid-path-parameter"));
         }
+
+        @Test
+        void uppercaseHexUuidPassesPathValidation() {
+            // Spec: hex digits are case-insensitive; only the 8-4-4-4-12
+            // shape is enforced — uppercase must reach the 404 stage, not 400.
+            String unknownUpper = UUID.randomUUID().toString().toUpperCase(Locale.ROOT);
+            given().get("/projetos/{id}", unknownUpper)
+                    .then()
+                    .statusCode(404)
+                    .body("type", equalTo(ERR + "resource-not-found"));
+        }
     }
 
     @Nested
@@ -660,13 +672,31 @@ class ErrorTaxonomyTest extends SpecValidatedRestTest {
 
         @Test
         void malformedJsonIsStillProblemJson() {
+            // Spec: syntactically unparseable body always reports field=body.
             given().contentType(ContentType.JSON)
                     .body("{invalid")
                     .post("/projetos")
                     .then()
                     .statusCode(400)
                     .contentType(PROBLEM_JSON)
-                    .body("type", equalTo(ERR + "invalid-request-body"));
+                    .body("type", equalTo(ERR + "invalid-request-body"))
+                    .body("errors", hasSize(1))
+                    .body("errors[0].field", equalTo("body"));
+        }
+
+        @Test
+        void multipleUnbindableFieldsAreFailFastInDocumentOrder() {
+            // Spec: unbindable values are an exception to the
+            // every-violating-field policy — only the first, in document order.
+            given().contentType(ContentType.JSON)
+                    .body("{\"name\": 5, \"description\": 7}")
+                    .post("/projetos")
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-request-body"))
+                    .body("errors", hasSize(1))
+                    .body("errors[0].field", equalTo("name"));
         }
 
         @Test
