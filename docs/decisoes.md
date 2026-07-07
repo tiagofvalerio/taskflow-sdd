@@ -147,6 +147,62 @@ de enforcement — `readOnly: true` sozinho é só metadado de documentação no
 OpenAPI 3.0 e não é respeitado pela maioria dos validadores de schema. Ver
 `ai/revisoes.md` entrada 1 para o racional completo dessa correção.
 
+### Interpretações fixadas pela implementação (promovidas à spec)
+
+Duas perguntas que a spec original deixava em aberto foram respondidas
+durante a implementação Quarkus, flagradas pela matriz de cobertura do
+`contract-tester` como asserções sem respaldo em texto normativo, e então
+**promovidas a texto da spec** — eram lacunas do contrato descobertas pela
+implementação, não drift do código:
+
+**JSON imparseável / shape não-vinculável → `invalid-request-body`.** A
+spec descrevia os `400` de corpo como violações de schema de um corpo *já
+parseado*; não dizia o que acontece com `{invalid` (sintaxe quebrada) ou
+`{"name": {"nested": true}}` (shape que não vincula ao tipo declarado).
+Leitura fixada: mesma falha de estágio de corpo — `400` com o mesmo type
+URI `invalid-request-body`, RFC 7807 — com payload **determinístico**, como
+exceção explícita à política de "todos os campos violados de uma vez"
+(que vale para validação de schema de corpo já vinculado): corpo
+sintaticamente imparseável reporta sempre a entrada única `field: body`;
+corpo parseável com valor não-vinculável é fail-fast em ordem de documento
+e reporta só o primeiro campo — o binding aborta antes de a validação de
+schema ver o resto. Racional: *least surprise* — para o cliente, corpo que
+não parseia e corpo que viola schema são o mesmo defeito ("meu corpo está
+errado"), e a alternativa (resposta nativa de parse do framework) vazaria
+formato fora da taxonomia RFC 7807, diferente em cada stack. O
+determinismo do payload veio da revisão adversarial da promoção (ver nota
+de processo): a primeira redação ("campo nomeado quando a posição do parse
+permite") deixava o `errors[]` dependente do parser — Jackson expõe path,
+`JSON.parse` do Ruby só linha/coluna — e duas implementações conformes
+divergiriam.
+
+**`format: uuid` = forma textual canônica do RFC 4122.** A spec só dizia
+`type: string, format: uuid`; `format` em OpenAPI é frouxo, e parsers de
+plataforma divergem exatamente na borda: `1-1-1-1-1` é aceito pelo
+`UUID.fromString` leniente do Java e rejeitado por um constraint de regex
+típico do Rails. Leitura fixada: canônico 8-4-4-4-12 hexadecimal, dígitos
+hex aceitos sem distinção de caixa (regra de input case-insensitive do
+próprio RFC 4122) — só o shape de agrupamento/comprimento é imposto; forma
+não-canônica é `400 invalid-path-parameter` (exemplo `1-1-1-1-1` agora na
+spec). Racional: a fronteira do contrato precisa ser independente de
+plataforma — "o que o parser da linguagem tolera" não é contrato. A
+cláusula de caixa também veio da revisão adversarial: "canônico" sozinho é
+autocontraditório (RFC 4122 emite minúsculas mas aceita input em qualquer
+caixa), e cada stack leria de um jeito.
+
+**Nota de processo.** As duas lacunas foram encontradas pela suíte de
+contrato (que as asseria sem que a spec as prometesse) e promovidas a
+texto da spec em vez de permanecerem convenção implícita dos testes Java —
+assim o dia 3 (Rails) implementa as duas respostas a partir do contrato,
+não por engenharia reversa dos testes da outra stack. A promoção passou
+pelo mesmo processo de qualquer mudança de spec: revisão adversarial do
+`spec-reviewer`, que derrubou a primeira redação por indeterminismo de
+payload (3 bloqueadores, todos "o *que* está fixado, mas o payload ainda
+deixa as stacks divergirem") — cada exceção de determinismo acima é
+resposta a um deles, e cada uma ganhou teste de contrato pinando o
+comportamento. Fluxo SDD na direção correta: lacuna descoberta → spec
+atualizada (com revisão) → código conforme.
+
 ---
 
 ## 4. Modelo de precedência completo: 400 → 404 → 422
