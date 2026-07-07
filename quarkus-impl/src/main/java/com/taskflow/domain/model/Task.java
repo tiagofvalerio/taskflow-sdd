@@ -81,6 +81,24 @@ public final class Task {
         completedAt = Instant.now();
     }
 
+    /**
+     * Dispatches a requested status change to the matching transition.
+     * Rule 6 is checked first even when the target has no transition method:
+     * a move to PENDING can never be valid (rule 5, forward-only), but under
+     * an archived project it must still report rule 6's error. Same-state
+     * no-op is PATCH semantics handled by the caller — this method treats a
+     * same-state request as the rule-5 violation it would otherwise be.
+     */
+    public void changeStatusTo(TaskStatus requested, ProjectStatus ownerProjectStatus) {
+        Objects.requireNonNull(requested, "requested must not be null");
+        ensureStatusChangeAllowed(ownerProjectStatus);
+        switch (requested) {
+            case IN_PROGRESS -> startProgress(ownerProjectStatus);
+            case DONE -> complete(ownerProjectStatus);
+            case PENDING -> throw new TaskStatusRegressionException(id, status, TaskStatus.PENDING);
+        }
+    }
+
     /** Business rule 2: only pending tasks can be deleted. */
     public boolean canBeDeleted() {
         return status == TaskStatus.PENDING;

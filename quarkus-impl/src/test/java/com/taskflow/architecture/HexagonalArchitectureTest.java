@@ -37,9 +37,7 @@ class HexagonalArchitectureTest {
                     .should().dependOnClassesThat().resideInAnyPackage(
                             concat(FORBIDDEN_FRAMEWORK_PACKAGES, "..adapter.."))
                     .because("the application layer may depend on the domain, never on"
-                            + " adapters or framework classes (CLAUDE.md)")
-                    // package is an empty scaffold until the application layer lands
-                    .allowEmptyShould(true);
+                            + " adapters or framework classes (CLAUDE.md)");
 
     private static String[] concat(String[] base, String... extra) {
         String[] all = new String[base.length + extra.length];

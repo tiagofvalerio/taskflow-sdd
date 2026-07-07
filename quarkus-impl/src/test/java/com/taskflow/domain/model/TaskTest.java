@@ -148,6 +148,47 @@ class TaskTest {
     }
 
     @Nested
+    @DisplayName("changeStatusTo — requested-status dispatch, rule 6 before rule 5")
+    class ChangeStatusTo {
+
+        @Test
+        void dispatchesForwardTransitions() {
+            Task task = pendingTask();
+            task.changeStatusTo(TaskStatus.IN_PROGRESS, ProjectStatus.ACTIVE);
+            assertEquals(TaskStatus.IN_PROGRESS, task.status());
+
+            task.changeStatusTo(TaskStatus.DONE, ProjectStatus.ACTIVE);
+            assertEquals(TaskStatus.DONE, task.status());
+            assertNotNull(task.completedAt());
+        }
+
+        @Test
+        void pendingTargetIsAlwaysARegression() {
+            TaskStatusRegressionException fromInProgress = assertThrows(
+                    TaskStatusRegressionException.class,
+                    () -> inProgressTask().changeStatusTo(TaskStatus.PENDING, ProjectStatus.ACTIVE));
+            assertEquals(TaskStatus.PENDING, fromInProgress.requestedStatus());
+
+            assertThrows(TaskStatusRegressionException.class,
+                    () -> doneTask().changeStatusTo(TaskStatus.PENDING, ProjectStatus.ACTIVE));
+        }
+
+        @Test
+        void skipAheadIsARegression() {
+            assertThrows(TaskStatusRegressionException.class,
+                    () -> pendingTask().changeStatusTo(TaskStatus.DONE, ProjectStatus.ACTIVE));
+        }
+
+        @Test
+        void rule6WinsEvenForThePendingTargetThatHasNoTransitionMethod() {
+            Task task = inProgressTask();
+            assertThrows(TaskStatusChangeBlockedException.class,
+                    () -> task.changeStatusTo(TaskStatus.PENDING, ProjectStatus.ARCHIVED));
+            assertEquals(TaskStatus.IN_PROGRESS, task.status());
+        }
+    }
+
+    @Nested
     @DisplayName("Rule 2 — only pending tasks can be deleted")
     class Deletion {
 
