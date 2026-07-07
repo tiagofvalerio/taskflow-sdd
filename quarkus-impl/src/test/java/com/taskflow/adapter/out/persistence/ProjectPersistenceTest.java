@@ -9,6 +9,8 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceException;
+import jakarta.transaction.Transactional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -27,6 +29,15 @@ class ProjectPersistenceTest {
 
     @Inject
     EntityManager em;
+
+    // REST tests share the same Dev Services database and commit their data;
+    // the exact-list assertions below need a clean slate.
+    @BeforeEach
+    @Transactional
+    void cleanDatabase() {
+        em.createNativeQuery("delete from task").executeUpdate();
+        em.createNativeQuery("delete from project").executeUpdate();
+    }
 
     private Project seed(String uuid, String name, ProjectStatus status, String createdAt) {
         return projects.save(Project.reconstitute(new ProjectId(UUID.fromString(uuid)),
