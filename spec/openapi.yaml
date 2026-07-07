@@ -87,6 +87,32 @@ info:
       invalid parameter, evaluated in the order the parameters are
       documented on the operation — for `GET /projetos/{id}/tarefas`, that
       means `status` is checked before `priority`.
+    - **Unparseable and unbindable bodies are `invalid-request-body`.** A
+      request body that cannot be parsed as JSON at all (syntactically
+      malformed), or whose value shapes cannot be bound to the declared
+      types (e.g. a JSON object or number where the schema expects a
+      string — no scalar coercion), fails the body stage like any other
+      schema violation: `400` with the same
+      `https://taskflow.dev/errors/invalid-request-body` type URI and an
+      RFC 7807 `ValidationProblemDetails` body. Both cases are
+      deterministic exceptions to the every-violating-field-at-once
+      policy above (which applies to schema validation of a successfully
+      bound body): a syntactically unparseable body always reports the
+      single entry `field: body`; a parseable body with unbindable
+      values is fail-fast in document order and reports only the first
+      unbindable field — binding aborts before schema validation can see
+      the rest. This mapping is contractual — it is not left to each
+      framework's native parse-error response.
+    - **Path ids are canonical UUIDs.** `format: uuid` on the `id` path
+      parameters means the canonical RFC 4122 textual form — 8-4-4-4-12
+      hexadecimal digits — not whatever a platform parser happens to
+      tolerate. A non-canonical string such as `1-1-1-1-1` (accepted by
+      Java's lenient `UUID.fromString`, for example) is a malformed path
+      parameter and yields `400 invalid-path-parameter`, keeping the
+      boundary platform-independent across implementations. Hex digits
+      are accepted case-insensitively, matching RFC 4122's
+      case-insensitive input rule — only the grouping/length shape is
+      enforced.
     - **Unrecognized query parameters are ignored.** A query string
       containing a parameter the operation doesn't declare (e.g. `?foo=bar`)
       is not rejected — the extra parameter is silently ignored (tolerant
@@ -482,7 +508,11 @@ components:
       name: id
       in: path
       required: true
-      description: Project id
+      description: |
+        Project id. Canonical RFC 4122 textual form (8-4-4-4-12 hex
+        digits) — non-canonical strings some platform parsers tolerate
+        (e.g. `1-1-1-1-1`) are rejected with `400`; see the path-id scope
+        decision in `info.description`.
       schema:
         type: string
         format: uuid
@@ -491,14 +521,22 @@ components:
       name: id
       in: path
       required: true
-      description: Task id
+      description: |
+        Task id. Canonical RFC 4122 textual form (8-4-4-4-12 hex digits)
+        — non-canonical strings some platform parsers tolerate (e.g.
+        `1-1-1-1-1`) are rejected with `400`; see the path-id scope
+        decision in `info.description`.
       schema:
         type: string
         format: uuid
 
   responses:
     PathParamBadRequest:
-      description: The `id` path parameter is not a valid UUID.
+      description: |
+        The `id` path parameter is not a canonical RFC 4122 UUID
+        (8-4-4-4-12 hex digits). This includes non-canonical forms that
+        some platform parsers tolerate (e.g. `1-1-1-1-1`) — see the
+        path-id scope decision in `info.description`.
       content:
         application/problem+json:
           schema:
@@ -506,6 +544,8 @@ components:
           examples:
             invalidUuidPathParameter:
               $ref: "#/components/examples/InvalidUuidPathParameter"
+            nonCanonicalUuidPathParameter:
+              $ref: "#/components/examples/NonCanonicalUuidPathParameter"
 
     ProjectBodyBadRequest:
       description: |
@@ -513,7 +553,10 @@ components:
         field not accepted on create (e.g. `status`). Examples below are
         illustrative, not exhaustive — any schema violation (missing,
         invalid, oversized, unknown, or `readOnly` field) yields this same
-        response shape.
+        response shape, as does a body that cannot be parsed as JSON at
+        all or whose value shapes cannot be bound to the declared types —
+        see the unparseable/unbindable-body scope decision in
+        `info.description`.
       content:
         application/problem+json:
           schema:
@@ -523,6 +566,8 @@ components:
               $ref: "#/components/examples/ProjectNameInvalid"
             projectStatusSubmittedOnCreate:
               $ref: "#/components/examples/ProjectStatusSubmittedOnCreate"
+            unparseableRequestBody:
+              $ref: "#/components/examples/UnparseableRequestBody"
 
     ProjectPatchBodyBadRequest:
       description: |
@@ -530,7 +575,10 @@ components:
         parameter, invalid `name`, or an empty `{}` body. Examples below are
         illustrative, not exhaustive — any schema violation (missing,
         invalid, oversized, out-of-enum, unknown, or `readOnly` field)
-        yields this same response shape.
+        yields this same response shape, as does a body that cannot be
+        parsed as JSON at all or whose value shapes cannot be bound to the
+        declared types — see the unparseable/unbindable-body scope decision in
+        `info.description`.
       content:
         application/problem+json:
           schema:
@@ -542,6 +590,8 @@ components:
               $ref: "#/components/examples/ProjectNameInvalid"
             emptyPatchBody:
               $ref: "#/components/examples/EmptyPatchBody"
+            unparseableRequestBody:
+              $ref: "#/components/examples/UnparseableRequestBody"
 
     TaskCreateBodyBadRequest:
       description: |
@@ -549,7 +599,10 @@ components:
         parameter, invalid `title`, missing `priority`, or an out-of-enum
         `priority` value. Examples below are illustrative, not exhaustive —
         any schema violation (missing, invalid, oversized, out-of-enum,
-        unknown, or `readOnly` field) yields this same response shape.
+        unknown, or `readOnly` field) yields this same response shape, as
+        does a body that cannot be parsed as JSON at all or whose value
+        shapes cannot be bound to the declared types — see the
+        unparseable/unbindable-body scope decision in `info.description`.
       content:
         application/problem+json:
           schema:
@@ -563,6 +616,8 @@ components:
               $ref: "#/components/examples/TaskPriorityMissing"
             taskPriorityInvalid:
               $ref: "#/components/examples/TaskPriorityInvalid"
+            unparseableRequestBody:
+              $ref: "#/components/examples/UnparseableRequestBody"
 
     TaskPatchBodyBadRequest:
       description: |
@@ -570,7 +625,10 @@ components:
         invalid `title`, a manually-submitted `completedAt`, or an empty
         `{}` body. Examples below are illustrative, not exhaustive — any
         schema violation (missing, invalid, oversized, out-of-enum,
-        unknown, or `readOnly` field) yields this same response shape.
+        unknown, or `readOnly` field) yields this same response shape, as
+        does a body that cannot be parsed as JSON at all or whose value
+        shapes cannot be bound to the declared types — see the
+        unparseable/unbindable-body scope decision in `info.description`.
       content:
         application/problem+json:
           schema:
@@ -584,6 +642,8 @@ components:
               $ref: "#/components/examples/CompletedAtSubmitted"
             emptyPatchBody:
               $ref: "#/components/examples/EmptyPatchBody"
+            unparseableRequestBody:
+              $ref: "#/components/examples/UnparseableRequestBody"
 
     ProjectStatusFilterBadRequest:
       description: |
@@ -600,8 +660,9 @@ components:
     TaskFiltersBadRequest:
       description: |
         Malformed request for `GET /projetos/{id}/tarefas`: invalid path
-        parameter, or the `status`/`priority` query filter is outside its
-        enum.
+        parameter (including non-canonical UUID forms — see the path-id
+        scope decision in `info.description`), or the `status`/`priority`
+        query filter is outside its enum.
       content:
         application/problem+json:
           schema:
@@ -609,6 +670,8 @@ components:
           examples:
             invalidUuidPathParameter:
               $ref: "#/components/examples/InvalidUuidPathParameter"
+            nonCanonicalUuidPathParameter:
+              $ref: "#/components/examples/NonCanonicalUuidPathParameter"
             taskStatusFilterInvalid:
               $ref: "#/components/examples/TaskStatusFilterInvalid"
             taskPriorityFilterInvalid:
@@ -1000,6 +1063,25 @@ components:
 
     InvalidUuidPathParameter:
       summary: Identificador malformado no path
+      value:
+        type: https://taskflow.dev/errors/invalid-path-parameter
+        title: Parâmetro de path inválido
+        status: 400
+        detail: O identificador informado não é um UUID válido.
+
+    UnparseableRequestBody:
+      summary: Corpo não parseável como JSON (sempre reportado como field body)
+      value:
+        type: https://taskflow.dev/errors/invalid-request-body
+        title: Corpo da requisição inválido
+        status: 400
+        detail: O corpo da requisição não é um JSON válido.
+        errors:
+          - field: body
+            message: JSON malformado
+
+    NonCanonicalUuidPathParameter:
+      summary: Identificador não-canônico (tolerado por parsers lenientes) também é rejeitado
       value:
         type: https://taskflow.dev/errors/invalid-path-parameter
         title: Parâmetro de path inválido
