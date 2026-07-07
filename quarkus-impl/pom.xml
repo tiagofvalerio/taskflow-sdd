@@ -17,6 +17,7 @@
         <skipITs>true</skipITs>
         <surefire-plugin.version>3.5.6</surefire-plugin.version>
         <archunit.version>1.4.1</archunit.version>
+        <swagger-request-validator.version>2.44.9</swagger-request-validator.version>
         <!-- Matches the Testcontainers version used by the Quarkus 3.37 platform (Dev Services) -->
         <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
@@ -91,6 +92,12 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.atlassian.oai</groupId>
+            <artifactId>swagger-request-validator-restassured</artifactId>
+            <version>${swagger-request-validator.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
