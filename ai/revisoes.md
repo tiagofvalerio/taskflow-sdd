@@ -727,3 +727,54 @@ incompleta, e por quê — não é um changelog de features.
    comparação sistemática contra o contrato (e, mecanicamente, a suíte
    de contrato/Schemathesis do próximo passo); conformidade não é o que
    o código faz, é o que o framework deixa passar por ele.
+
+## 13. Testes de taxonomia sobre-especificados — igualdade exata em prosa ilustrativa da spec
+
+1. **Data / Fase** — 2026-07-07, camada de validação de contrato do
+   `quarkus-impl` (matriz de cobertura do agente `contract-tester` +
+   validação de schema nas respostas; corrigido em `f4d8eb4`).
+
+2. **O que a IA sugeriu** — Nos testes de taxonomia escritos em fases
+   anteriores, a própria IA asseriu strings de `detail`/`message` com
+   igualdade exata, copiadas dos `components.examples` da spec:
+
+   ```java
+   .body("detail", equalTo("Nenhum projeto encontrado com id " + unknown))
+   .body("detail", equalTo("O identificador informado não é um UUID válido."))
+   .body("errors[0].message", equalTo("deve ser um UUID válido"))
+   ```
+
+3. **Problema identificado** — O agente `contract-tester`, ao montar a
+   matriz de cobertura, flagrou sobre-especificação nos meus próprios
+   testes de taxonomia: igualdade exata em strings de detail copiadas
+   dos examples da spec — examples em OpenAPI são ilustrativos, não
+   normativos (o schema só exige `detail` legível), e a exigência
+   forçaria o Rails a reproduzir as frases do Java caractere a
+   caractere, divergência que o contrato nunca prometeu. O ponto sutil:
+   o drift aqui é *para mais* — os testes exigiam mais do que a spec
+   promete, o espelho do padrão das entradas 9–12, onde a suíte exigia
+   *de menos*. Ambos são desvio do contrato; este passaria despercebido
+   até o dia 3, quando a suíte Rails ou reproduziria frases em
+   português do Java ou "falharia" sem violar contrato algum.
+
+4. **Correção aplicada** — Política de asserção explícita, decidida
+   pelo usuário sobre o achado e documentada no javadoc do
+   `ErrorTaxonomyTest` (vale também para a suíte Rails):
+   - **Normativo — igualdade exata**: `type` URI, status HTTP, membro
+     `status` do problem, shape do schema, `errors[].field`, resultados
+     de precedência.
+   - **Ilustrativo — token de carga (`containsString`)**: prosa de
+     `detail`/`message`, com tokens escolhidos para provar que a regra
+     certa disparou (ex.: `"retroceder"` para regra 5, `"estiver
+     arquivado"` para regra 6).
+   - **Exceção — exata**: texto que a política normativa de erros da
+     spec cita verbatim (os details de filtro de query).
+   Igualdades exatas ilustrativas abrandadas para tokens; asserções
+   normativas mantidas (e reforçadas: as seis regras 422 agora asserem
+   `type` + `status` + token do `detail`).
+
+5. **Lição** — Testes também driftam do contrato — para mais, não só
+   para menos: asserção mais forte que a promessa da spec vira contrato
+   fantasma que a segunda implementação herda sem nunca ter sido
+   pactuado; a fronteira normativo/ilustrativo precisa ser política
+   explícita da suíte, não hábito do gerador.
