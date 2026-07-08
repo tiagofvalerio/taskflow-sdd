@@ -880,3 +880,62 @@ incompleta, e por quê — não é um changelog de features.
    mas asserem só um; mutação é o instrumento que torna essa assimetria
    visível e barata de corrigir — rodá-la é fechar o ciclo que o
    guardian só consegue apontar.
+
+## 16. Decisão de escopo — implementação Rails cortada; o plano dual-stack nunca foi questionado pela IA
+
+1. **Data / Fase** — 2026-07-07, revisão de escopo pós-mutação (todos os
+   artefatos atualizados na mesma sessão; `docs/decisoes.md` §10 é o
+   registro da decisão).
+
+2. **O que a IA sugeriu** — Rigorosamente, nada errado: o dual-stack
+   (Quarkus + Rails sobre o mesmo contrato) foi meta autoimposta por mim,
+   não proposta da IA. Mas a IA abraçou o plano integralmente e o
+   entranhou em todos os artefatos que gerou — `CLAUDE.md` com dois
+   stacks e modo de mentoria Ruby, subagentes (`domain-guardian` com
+   seção Rails inteira, `contract-tester` citando a gem `committee`,
+   `/sdd-check` aceitando `rails-impl` como argumento), pirâmide de
+   testes com camadas Rails, tabela de delegação em `ai/skills.md` com
+   duas linhas Ruby — sem em nenhum momento sinalizar que o desafio pede
+   *uma* API e que a segunda era risco de prazo.
+
+3. **Problema identificado** — Dois, de naturezas diferentes:
+   - **De processo (meu e da IA)**: o custo do dual-stack só foi
+     confrontado com o calendário depois de mutação + suíte de contrato
+     + emendas de spec consumirem o tempo que o Rails ocuparia. A IA
+     executa o escopo que recebe com a mesma convicção, seja ele viável
+     ou não — em nenhuma das dezenas de sessões ela levantou "isso cabe
+     no prazo?". Vigilância de escopo não é delegável.
+   - **De consistência (achado na execução do corte)**: o plano estava
+     mais espalhado do que minha própria lista de artefatos a atualizar —
+     eu listei 5 itens; a varredura da IA achou mais 3 fora da lista
+     (`domain-guardian`, `contract-tester`, `sdd-check` em `.claude/`),
+     além de uma contagem defasada preexistente ("5 business rules" em
+     agentes escritos antes da regra 6 existir). Escopo cortado em prosa
+     mas vivo em tooling continuaria dirigindo sessões futuras da IA
+     para um stack que não existe mais.
+
+4. **Correção aplicada** — Corte com atualização consistente de todos os
+   artefatos: `CLAUDE.md` single-stack (mentoria Ruby e comandos Rails
+   removidos), `spec/openapi.yaml` com prosa neutralizada (6 pontos, só
+   texto — contrato byte a byte intacto no que é normativo; servidor
+   `:3000` removido), `docs/decisoes.md` §2 reescrito como arquitetura
+   da entrega + §10 novo com o racional do trade-off, `ai/skills.md` com
+   as linhas Ruby removidas e observação de processo, os 3 arquivos de
+   `.claude/` de fora da minha lista corrigidos, `rails-impl/` (vazio)
+   deletado. Ponto central preservado no §10: o trabalho de fechamento de
+   divergência cross-stack na spec (ordenação, datetimes, forma de UUID,
+   mapeamento de parse-failure, precedência) **não** vira custo afundado
+   — é o que torna o contrato independente de implementação, que é a
+   própria tese de SDD. O Rails funcionou como "segundo leitor
+   hipotético" que forçou a spec a ser inequívoca; o corte remove a
+   demonstração, não a propriedade. A redação do §10 passou por revisão
+   minha antes dos demais artefatos serem tocados (a IA mostrou o
+   rascunho e perguntou como tratar as demais seções — escolhi rewrite
+   leve em vez de nota histórica).
+
+5. **Lição** — A IA executa qualquer escopo com convicção igual; a
+   pergunta "isso ainda cabe?" tem que vir do humano, cedo e
+   recorrentemente — e quando o corte vier, pedir varredura mecânica de
+   TODOS os artefatos (inclusive o tooling em `.claude/` que dirige a
+   própria IA), porque plano morto que sobrevive em agente/skill vira
+   instrução ativa nas sessões seguintes.

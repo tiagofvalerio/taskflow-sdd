@@ -17,18 +17,16 @@ rejeitado está em `ai/revisoes.md`; os prompts relevantes, em `ai/prompts.md`
 | Área | Por que delego |
 |---|---|
 | Rascunho do contrato OpenAPI 3.0 | A spec passa por revisão adversarial (subagente `spec-reviewer`,  uma técnica em que dois sistemas ou agentes atuam em posições opostas para testar a robustez de um projeto, código ou ideia. Um agente propõe a solução, enquanto o outro assume um papel crítico para buscar vulnerabilidades, fraquezas e casos extremos, garantindo um resultado muito mais seguro e confiável.) e por minha leitura integral antes de virar fonte da verdade. |
-| Scaffolding e boilerplate (Quarkus, Rails, Dockerfiles, GitHub Actions) | Baixo risco de decisão embutida; alto custo manual; sempre validado rodando localmente. |
+| Scaffolding e boilerplate (Quarkus, Dockerfiles, GitHub Actions) | Baixo risco de decisão embutida; alto custo manual; sempre validado rodando localmente. |
 | Geração de testes de contrato a partir da spec | Os cenários vêm da spec (fonte da verdade), não do código — o subagente `contract-tester` audita a matriz de cobertura. |
-| Tradução do design de domínio entre stacks (Java → Ruby) | As 5 regras de negócio já foram definidas e testadas; a tradução é mecânica e verificada pelo subagente `domain-guardian` e pelas suítes de teste. |
-| Mentoria em Ruby/Rails | Sou novo em Ruby. Delego a explicação de idiomas (bang methods, callbacks, concerns), mas não a responsabilidade de entendê-los: mantenho um guia de estudo e reviso cada explicação. |
 | Investigação de versões e compatibilidade de bibliotecas | Sempre com instrução explícita de verificar em fontes oficiais antes de afirmar — sugestões desatualizadas da IA capturadas viram entradas em `ai/revisoes.md`. |
 
 ## O que NÃO delego (decisões que ficam comigo)
 
 - Decisões de design da spec: semântica de PATCH, 400 vs 422 (incluindo o caso
   do `completedAt` enviado manualmente), ausência deliberada de paginação.
-- Onde cada regra de negócio vive na arquitetura (entidade de domínio no Quarkus;
-  modelo ActiveRecord no Rails) e a decisão de NÃO forçar hexagonal no Rails.
+- Onde cada regra de negócio vive na arquitetura (entidade de domínio, nunca
+  em resource/controller — ver `docs/decisoes.md` §2).
 - Aceitar ou rejeitar cada finding dos revisores automáticos (`spec-reviewer`,
   `domain-guardian`, SonarQube) e dos mutantes sobreviventes (PIT).
 - A mensagem final de cada commit e o momento de cada commit (a história do git
@@ -52,6 +50,18 @@ A pasta `.claude/` (versionada neste repositório) é parte da resposta à pergu
 - **`CLAUDE.md`** — regras de metodologia (spec é a fonte da verdade), de
   arquitetura (regras de negócio nunca em controllers) e de disciplina de
   documentação, carregadas em toda sessão.
+
+## Observações de processo — o que mudou em relação ao plano
+
+- **Corte de escopo: a implementação Rails foi cortada** (ver
+  `docs/decisoes.md` §10). Com isso, duas áreas de delegação planejadas no
+  Dia 0 deixaram de existir: a tradução do design de domínio entre stacks
+  (Java → Ruby) e a mentoria em Ruby/Rails. Não foi um recuo por
+  desconfiança da IA — foi trade-off de tempo vs. profundidade: o tempo foi
+  reinvestido em mutation testing (PIT, 100% kill rate), na suíte de
+  contrato validada por schema e nas emendas de spec com revisão
+  adversarial. As linhas removidas da tabela acima permanecem no histórico
+  git deste arquivo, que é parte da evidência de processo.
 
 <!-- ATUALIZAR NO DIA 4: o que mudou em relação ao plano? Algo que planejei
      delegar e recuei? Algo que passei a delegar? Referenciar entradas

@@ -3,7 +3,7 @@ name: sdd-check
 description: Verify current implementation strictly conforms to spec/openapi.yaml; report drift
 disable-model-invocation: true
 ---
-Compare the implementation in $ARGUMENTS (quarkus-impl or rails-impl) against
+Compare the implementation in quarkus-impl against
 spec/openapi.yaml. Check systematically:
 
 1. Every path+method in the spec exists in the code (and nothing extra exists)

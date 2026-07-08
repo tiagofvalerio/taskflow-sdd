@@ -15,7 +15,7 @@ Build/verify a coverage matrix: every spec scenario × test existence:
   manual completedAt submission (assert the spec-chosen behavior)
 - completedAt auto-fill on transition to done — assert it is set and plausible
 - Schema validation: responses validated against the OpenAPI document
-  (swagger-request-validator in Java; committee in Rails)
+  (swagger-request-validator)
 
 Report missing scenarios as a checklist. Tests must reference the spec, not the
 implementation's current behavior.

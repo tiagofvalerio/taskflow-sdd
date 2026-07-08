@@ -10,26 +10,23 @@ incluindo alternativas rejeitadas e seus trade-offs. Fontes: `spec/openapi.yaml`
 
 ## 1. Por que spec-first, e como prevenimos drift
 
-`spec/openapi.yaml` é a fonte única da verdade: nenhuma das duas stacks decide
-comportamento por conta própria, e nenhuma delas é "mais autoritativa" que a
-outra. O risco real de duas implementações independentes (Quarkus e Rails)
-partindo do mesmo contrato é drift silencioso — cada stack, sob pressão de
-prazo, tende a resolver ambiguidade do jeito que seu framework favorece por
-padrão, e essas escolhas divergem sem ninguém perceber até um cliente real
-bater na diferença.
+`spec/openapi.yaml` é a fonte única da verdade: a implementação nunca decide
+comportamento por conta própria. O risco real de implementar a partir de um
+contrato é drift silencioso — sob pressão de prazo, a implementação tende a
+resolver ambiguidade do jeito que seu framework favorece por padrão, e essa
+escolha se cristaliza sem ninguém perceber até um cliente real bater na
+diferença entre o que a spec promete e o que o código faz.
 
 Prevenção de drift, em três camadas:
 
-1. **Testes de contrato em cada stack, contra o mesmo schema.** Quarkus usa
-   RestAssured combinado com um validador de schema OpenAPI; Rails usa a gem
-   `committee`. Ambos validam requisição e resposta reais contra
+1. **Testes de contrato contra o próprio schema.** RestAssured combinado com
+   um validador de schema OpenAPI valida requisição e resposta reais contra
    `spec/openapi.yaml` — não contra uma cópia reescrita ou um schema
    gerado a partir do próprio código.
-2. **Schemathesis em CI, contra as duas APIs rodando.** Testes baseados em
-   propriedade gerados a partir do próprio `openapi.yaml`, disparados contra
-   as duas implementações (Quarkus em `:8080`, Rails em `:3000`). Isso pega
+2. **Schemathesis em CI, contra a API rodando.** Testes baseados em
+   propriedade gerados a partir do próprio `openapi.yaml`. Isso pega
    divergência comportamental que testes unitários não pegam, porque explora
-   o espaço de entradas a partir do contrato, não a partir do que cada
+   o espaço de entradas a partir do contrato, não a partir do que o
    desenvolvedor lembrou de testar manualmente.
 3. **Diff entre a spec gerada pelo `smallrye-openapi` (extensão padrão do
    Quarkus, que introspecciona as anotações JAX-RS/Jakarta do código e produz
@@ -40,61 +37,57 @@ Prevenção de drift, em três camadas:
    implementação Quarkus silenciosamente expôs um campo, endpoint ou status
    code que a spec não previu.
 
-**Alternativa rejeitada — code-first (spec gerada a partir das anotações de
-uma das stacks, ou de ambas independentemente).** Rejeitada porque contradiz a
-metodologia SDD que o próprio `CLAUDE.md` declara: um contrato derivado de
-anotações por stack não passa pela revisão adversarial centralizada que a
-spec manual recebeu (ver item 9) — cada stack chegaria a uma variação
-ligeiramente diferente da mesma regra de negócio, sem um único lugar de
-verdade pra arbitrar qual delas está certa.
+**Alternativa rejeitada — code-first (spec gerada a partir das anotações do
+código).** Rejeitada porque contradiz a metodologia SDD que o próprio
+`CLAUDE.md` declara: um contrato derivado de anotações herda as decisões
+default do framework em vez de decisões revisadas, e não passa pela revisão
+adversarial centralizada que a spec manual recebeu (ver item 9) — o contrato
+deixaria de ser independente de implementação, que é exatamente a
+propriedade que este projeto defende (ver item 10).
 
 ---
 
-## 2. Arquitetura assimétrica deliberada
+## 2. Arquitetura hexagonal com modelo de domínio rico
 
-Quarkus usa arquitetura hexagonal (domain layer com zero imports de
-framework — nenhum `jakarta.*`/JPA/Quarkus na camada de domínio; entidades
-JPA existem só nos adapters, com mappers de tradução). Rails usa o Rails-way
-idiomático: modelos ActiveRecord ricos, regra de negócio dentro do model,
-controllers finos, convenções padrão (validations, scopes, strong params).
+A implementação usa arquitetura hexagonal: a camada de domínio tem zero
+imports de framework — nenhum `jakarta.*`/JPA/Quarkus; entidades JPA existem
+só nos adapters, com mappers de tradução entre entidade JPA e objeto de
+domínio. Toda regra de negócio vive na entidade de domínio, nunca em
+resource/controller — requisito não-negociável do `CLAUDE.md`, não uma
+preferência de estilo.
 
-Isso é assimetria deliberada, não inconsistência: cada stack é fiel ao que é
-idiomático no próprio ecossistema.
+Hexagonal no Quarkus não é esforço extra: o ecossistema tem, nativamente, os
+elementos que tornam a arquitetura barata — CDI para inversão de
+dependência, interfaces de porta injetáveis, e uma separação natural entre a
+anotação JAX-RS/JPA (infraestrutura) e uma classe de domínio pura (POJO). É
+o caminho que o próprio ecossistema já pavimenta.
 
-- **Quarkus** tem, nativamente, os elementos que tornam hexagonal barato:
-  CDI para inversão de dependência, interfaces de porta injetáveis, e uma
-  separação natural entre a anotação JAX-RS/JPA (infraestrutura) e uma classe
-  de domínio pura (POJO). Não é esforço extra — é o caminho que o próprio
-  ecossistema já pavimenta.
-- **Rails** amarra persistência e domínio por design: ActiveRecord *é* a
-  camada de acesso a dados e o lugar convencional pra regra de negócio ao
-  mesmo tempo ("fat models, skinny controllers" é o próprio idioma do
-  framework, não um desvio dele). Forçar hexagonal em Rails significaria lutar
-  contra o framework — introduzir uma camada de domínio isolada de
-  ActiveRecord exigiria replicar manualmente o que o Rails já resolve
-  (mapeamento objeto-relacional, callbacks, validações), sem ganho real de
-  testabilidade que já não exista via `ActiveRecord::Base` mockável em specs.
+**Onde cada uma das 6 regras de negócio vive** (todas na camada de domínio):
 
-**Alternativa rejeitada — hexagonal nas duas stacks, por simetria.** Rejeitada
-porque `CLAUDE.md` exige explicitamente "idiomatic to its ecosystem" pra cada
-stack, e forçar uma arquitetura estranha ao Rails produziria código que um
-entrevistador Rails reconheceria como não-convencional — o oposto do que o
-modo de mentoria Ruby deste projeto busca (aprender o Rails-way de verdade,
-não uma tradução literal do Java).
+| Regra | Onde vive |
+|---|---|
+| 1. Arquivar bloqueado por tarefa `in_progress` | Entidade `Project`, verificada na transição de status |
+| 2. Só tarefa `pending` pode ser deletada | Entidade `Task`, guarda de exclusão |
+| 3. `completedAt` setado internamente | Entidade `Task`, método de domínio que transiciona pra `done` e atribui o timestamp |
+| 4. Projeto arquivado não aceita tarefa nova | Entidade `Project`/`Task`, checado na criação |
+| 5. Transição de status forward-only | Entidade `Task`, guarda de transição |
+| 6. Status travado se projeto arquivado | Entidade `Task`, checado antes da regra 5 (precedência — ver item 4) |
 
-**Onde cada uma das 6 regras de negócio vive:**
+**Alternativa rejeitada — modelo anêmico com regras em services/resources.**
+Rejeitada porque espalha os invariantes por camadas que o mutation testing
+(item 8) não cerca com a mesma força, e porque cada ponto de entrada novo
+teria que *relembrar* as regras em vez de esbarrar nelas na entidade — com
+as guardas no domínio, o estado inválido é inconstruível, independente de
+quem chama.
 
-| Regra | Quarkus (domain layer) | Rails (ActiveRecord model) |
-|---|---|---|
-| 1. Arquivar bloqueado por tarefa `in_progress` | Entidade `Project` (ou equivalente), verificada na transição de status | Modelo `Project`, validação/callback antes de persistir `status: archived` |
-| 2. Só tarefa `pending` pode ser deletada | Entidade `Task`, guarda de exclusão | Modelo `Task`, validação/callback em `destroy` |
-| 3. `completedAt` setado internamente | Entidade `Task`, método de domínio que transiciona pra `done` e atribui o timestamp | Modelo `Task`, callback (`before_save`/`around_save`) acoplado à transição de status |
-| 4. Projeto arquivado não aceita tarefa nova | Entidade `Project`/`Task`, checado na criação | Modelo `Task`, validação de criação que consulta o projeto pai |
-| 5. Transição de status forward-only | Entidade `Task`, guarda de transição | Modelo `Task`, validação de transição de estado |
-| 6. Status travado se projeto arquivado | Entidade `Task`, checado antes da regra 5 (precedência — ver item 4) | Modelo `Task`, mesma precedência |
-
-Em ambas as stacks, nenhuma regra de negócio vive em controller/resource — é
-requisito não-negociável do `CLAUDE.md`, não uma preferência de estilo.
+**Nota histórica**: até o corte de escopo (item 10), o plano previa uma
+segunda implementação Rails deliberadamente *assimétrica* — Rails-way
+idiomático, modelos ActiveRecord ricos, sem hexagonal, porque forçar uma
+camada de domínio isolada de ActiveRecord seria lutar contra o framework. O
+princípio que sustentava a assimetria permanece na entrega: a arquitetura
+serve ao idioma do ecossistema (hexagonal porque é barato *no Quarkus*), não
+a uma estética universal; e a regra de negócio vive no modelo/entidade em
+qualquer idioma.
 
 ---
 
@@ -169,7 +162,7 @@ e reporta só o primeiro campo — o binding aborta antes de a validação de
 schema ver o resto. Racional: *least surprise* — para o cliente, corpo que
 não parseia e corpo que viola schema são o mesmo defeito ("meu corpo está
 errado"), e a alternativa (resposta nativa de parse do framework) vazaria
-formato fora da taxonomia RFC 7807, diferente em cada stack. O
+formato fora da taxonomia RFC 7807, diferente em cada framework. O
 determinismo do payload veio da revisão adversarial da promoção (ver nota
 de processo): a primeira redação ("campo nomeado quando a posição do parse
 permite") deixava o `errors[]` dependente do parser — Jackson expõe path,
@@ -188,17 +181,18 @@ spec). Racional: a fronteira do contrato precisa ser independente de
 plataforma — "o que o parser da linguagem tolera" não é contrato. A
 cláusula de caixa também veio da revisão adversarial: "canônico" sozinho é
 autocontraditório (RFC 4122 emite minúsculas mas aceita input em qualquer
-caixa), e cada stack leria de um jeito.
+caixa), e cada implementação leria de um jeito.
 
 **Nota de processo.** As duas lacunas foram encontradas pela suíte de
 contrato (que as asseria sem que a spec as prometesse) e promovidas a
 texto da spec em vez de permanecerem convenção implícita dos testes Java —
-assim o dia 3 (Rails) implementa as duas respostas a partir do contrato,
-não por engenharia reversa dos testes da outra stack. A promoção passou
-pelo mesmo processo de qualquer mudança de spec: revisão adversarial do
-`spec-reviewer`, que derrubou a primeira redação por indeterminismo de
+assim qualquer implementação futura (à época do achado, o plano previa uma
+segunda, em Rails — ver item 10) implementa as duas respostas a partir do
+contrato, não por engenharia reversa dos testes existentes. A promoção
+passou pelo mesmo processo de qualquer mudança de spec: revisão adversarial
+do `spec-reviewer`, que derrubou a primeira redação por indeterminismo de
 payload (3 bloqueadores, todos "o *que* está fixado, mas o payload ainda
-deixa as stacks divergirem") — cada exceção de determinismo acima é
+deixa implementações conformes divergirem") — cada exceção de determinismo acima é
 resposta a um deles, e cada uma ganhou teste de contrato pinando o
 comportamento. Fluxo SDD na direção correta: lacuna descoberta → spec
 atualizada (com revisão) → código conforme.
@@ -228,12 +222,12 @@ Só a primeira categoria que falha é reportada. `PATCH /tarefas/nao-e-um-uuid`
 com corpo inválido retorna só o problema de path parameter, nunca os dois
 juntos. Racional: o path parameter identifica *qual* recurso a requisição
 endereça — não faz sentido validar mais nada antes disso estar resolvido — e
-essa ordem já é o comportamento nativo de ambos os frameworks-alvo (JAX-RS
+essa ordem já é o comportamento nativo dos frameworks HTTP típicos (JAX-RS
 resolve path antes de invocar validação de corpo; roteamento do Rails resolve
 segmentos de path antes do controller processar params). Documentar isso não
-força nenhuma stack a se comportar diferente do que já faria por padrão — é
-esse fato, aliás, que torna a escolha barata: nenhuma stack precisa de
-configuração extra pra convergir.
+força a implementação a se comportar diferente do que já faria por padrão — é
+esse fato, aliás, que torna a escolha barata: nenhuma configuração extra é
+necessária pra convergir.
 
 **Dentro do próprio estágio 422**, precondições de estado são checadas antes
 de regras de transição/valor: em `PATCH /tarefas/{id}`, a regra 6 (o projeto
@@ -247,12 +241,12 @@ mesmo tempo. Sem essa precedência declarada, dois implementadores
 conformantes ao spec poderiam legitimamente retornar `type` URIs diferentes
 para a mesma requisição.
 
-**Por que isso garante resposta idêntica entre as duas stacks:** cada ponto
-de possível ambiguidade — 400 vs 404 vs 422, path vs query vs body dentro do
-400, precondição vs transição dentro do 422 — tem exatamente uma ordem
-declarada e uma única resposta possível. Não sobra nenhum ramo de decisão
-deixado para o framework de cada stack resolver "do jeito que ele resolve por
-padrão". Essa precedência não surgiu de uma vez: foi fechada em camadas
+**Por que isso garante resposta idêntica entre implementações
+independentes:** cada ponto de possível ambiguidade — 400 vs 404 vs 422,
+path vs query vs body dentro do 400, precondição vs transição dentro do 422
+— tem exatamente uma ordem declarada e uma única resposta possível. Não
+sobra nenhum ramo de decisão deixado para o framework resolver "do jeito que
+ele resolve por padrão". Essa precedência não surgiu de uma vez: foi fechada em camadas
 sucessivas ao longo de 5 rodadas de revisão adversarial (ver item 9) — cada
 rodada fechando uma colisão só pra revelar a mesma classe de ambiguidade um
 nível de abstração abaixo (primeiro 422-vs-422, depois 400-vs-400).
@@ -297,32 +291,33 @@ pode voltar a mudar de status assim que o projeto volta a `active`.
 
 ## 6. Convenções transversais que evitam divergência observável
 
-Um conjunto de decisões de baixo custo de implementação (não exigem
-configuração extra em nenhuma das stacks) que fecham divergência que, de
-outro modo, ficaria a cargo do default de cada framework:
+Um conjunto de decisões de baixo custo (não exigem configuração extra na
+implementação) que fecham divergência que, de outro modo, ficaria a cargo
+do default do framework — e variaria entre frameworks:
 
 - **Ordenação determinística nas listagens**: `createdAt` ascendente, `id`
   ascendente como desempate. `createdAt` sozinho não é ordem total — dois
   registros podem ser criados no mesmo milissegundo (comum em fixtures/seeds
   de teste rodando em lote), e a ordem entre eles ficaria indefinida de novo
-  sem o desempate. Sem essa declaração, `ORDER BY` implícito de JPA/Panache e
-  de ActiveRecord herdariam a ordem que o próprio query planner de cada banco
-  decidisse — não é garantido que sejam a mesma, nem que seja estável entre
-  execuções.
+  sem o desempate. Sem essa declaração, o `ORDER BY` implícito do ORM
+  (JPA/Panache, ActiveRecord, qualquer outro) herdaria a ordem que o próprio
+  query planner do banco decidisse — não é garantido que seja estável entre
+  execuções, nem igual entre implementações.
 - **Datetimes sempre UTC, sufixo `Z` literal**: nunca offset numérico
-  (`-03:00`). Sem essa decisão, Jackson (Quarkus) tende a emitir `Z` por
-  padrão, mas `ActiveSupport::TimeWithZone` (Rails) serializa no fuso horário
-  configurado da aplicação, com offset — mesmo instante, string diferente no
-  corpo da resposta, dependendo de qual stack responde.
+  (`-03:00`). Sem essa decisão, o formato ficaria a cargo do serializer de
+  cada ecossistema — Jackson tende a emitir `Z` por padrão, mas
+  `ActiveSupport::TimeWithZone` (Rails), por exemplo, serializa no fuso
+  horário configurado da aplicação, com offset — mesmo instante, string
+  diferente no corpo da resposta, dependendo de quem implementa.
 - **Trailing slash fora do contrato**: paths canônicos não têm barra final
   (`/projetos`, nunca `/projetos/`). Requisição pra forma não-canônica tem
   comportamento não especificado, excluída de teste de conformidade — mais
-  barato que obrigar as duas stacks a normalizar ou rejeitar de forma
-  idêntica, já que RESTEasy/JAX-RS e o roteamento do Rails não normalizam
-  isso da mesma forma por padrão.
+  barato que obrigar toda implementação a normalizar ou rejeitar de forma
+  idêntica, já que frameworks (RESTEasy/JAX-RS, roteamento do Rails) não
+  normalizam isso da mesma forma por padrão.
 - **Query params desconhecidos são ignorados** (tolerant reader): `?foo=bar`
   não é rejeitado. Decisão deliberada, não omissão — casa com o
-  comportamento nativo padrão de ambos os frameworks, e OpenAPI 3.0 não tem,
+  comportamento nativo padrão dos frameworks HTTP típicos, e OpenAPI 3.0 não tem,
   pra query string, um mecanismo equivalente a `additionalProperties: false`
   pra impor o contrário.
 - **Nomes de componentes em inglês, paths em português**: `schemas`,
@@ -345,8 +340,8 @@ como caminho mais simples.
 **Por quê**: este projeto trata timezone/formato de datetime como parte
 explícita do contrato (item 6) — exatamente o tipo de comportamento que
 diverge entre SQLite (sem tipo `timestamptz` nativo, datas frequentemente
-tratadas como texto) e Postgres (tipo `timestamptz` nativo, é o banco real de
-produção em ambos os stacks). Rodar os testes de integração contra o mesmo
+tratadas como texto) e Postgres (tipo `timestamptz` nativo, o banco real de
+produção). Rodar os testes de integração contra o mesmo
 motor de banco que rodaria em produção elimina uma fonte inteira de "passou
 no teste, quebrou em produção" — o tipo de divergência que motivou várias
 das decisões deste documento. Testcontainers mantém isso hermético e
@@ -366,15 +361,15 @@ já em cache.
 ## 8. Pirâmide de testes
 
 ```
-unit (domínio Java / model specs Rails)
+unit (domínio)
         ↓
-mutation (PIT no domínio Quarkus; mutant em app/models Rails, se viável)
+mutation (PIT em domínio + aplicação)
         ↓
 integração de adapters (Testcontainers PostgreSQL)
         ↓
-contrato (RestAssured + validador de schema / committee gem)
+contrato (RestAssured + validador de schema OpenAPI)
         ↓
-Schemathesis em CI, contra as duas APIs rodando
+Schemathesis em CI, contra a API rodando
 ```
 
 Cada camada testa uma classe de erro diferente, subindo em custo/tempo de
@@ -382,21 +377,16 @@ execução e descendo em granularidade:
 
 - **Unit**: regra de negócio isolada, sem I/O — a camada mais barata e mais
   numerosa.
-- **Mutation (PIT no Quarkus; `mutant` no Rails, se viável)**: garante que os
-  testes unitários realmente matam mutantes na camada de domínio/aplicação,
-  não só alcançam cobertura de linha sem asserção efetiva.
-- **Integração de adapters**: mappers JPA↔domínio (Quarkus) e persistência
-  ActiveRecord real (Rails) contra Postgres de verdade (item 7).
-- **Contrato**: cada stack validada contra `spec/openapi.yaml` isoladamente.
+- **Mutation (PIT)**: garante que os testes unitários realmente matam
+  mutantes nas camadas de domínio e aplicação, não só alcançam cobertura de
+  linha sem asserção efetiva. Resultado da entrega: 100% de kill rate.
+- **Integração de adapters**: mappers JPA↔domínio e persistência real contra
+  Postgres de verdade (item 7).
+- **Contrato**: requisições e respostas reais validadas contra
+  `spec/openapi.yaml` — não contra um schema derivado do código.
 - **Schemathesis**: última linha de defesa, gerando requisições a partir do
-  contrato e comparando comportamento das duas APIs vivas — a única camada
-  que compara Quarkus e Rails diretamente entre si, não cada um contra o
-  schema isoladamente.
-
-`mutant` (mutation testing em Ruby) é listado como "se viável" porque, ao
-contrário do PIT no ecossistema Java, sua adoção em Rails é menos
-padronizada e pode não compensar o custo de configuração dentro do escopo
-deste desafio — decisão de bolso, não recusa categórica.
+  próprio contrato — explora o espaço de entradas que o contrato declara,
+  não os cenários que alguém lembrou de escrever.
 
 ---
 
@@ -409,8 +399,8 @@ por rodada: **19 → 16 → 8 → 6 → 4 → 1**, seguida por **2** achados na
 varredura final.
 
 **Critério de parada explícito** (aplicado a partir da rodada 5): um achado
-só bloqueia se muda comportamento observável entre uma implementação Quarkus
-e uma Rails construídas estritamente a partir do texto do spec. Achado que é
+só bloqueia se muda comportamento observável entre duas implementações
+independentes construídas estritamente a partir do texto da spec. Achado que é
 só nitpick de documentação (estilo, `instance` opcional presente ou ausente,
 cross-reference genérico) é sinalizado como não-bloqueante, não usado como
 desculpa para mais uma rodada. Mesmo depois de a fase ter sido declarada
@@ -438,3 +428,39 @@ timezone, encoding, casing, trailing slash, content-type), rodado à parte de
 qualquer rodada adversarial genérica — porque perguntar "o que está errado
 no que já foi escrito?" nunca ia gerar a pergunta certa, que era "o que nunca
 foi escrito?".
+
+---
+
+## 10. Decisão de escopo — entrega single-stack (corte da implementação Rails)
+
+**Decisão**: o projeto entrega apenas a implementação Quarkus. A implementação
+Rails, planejada como segunda stack sobre o mesmo contrato, foi cortada.
+
+**Contexto**: o enunciado do desafio pede *uma* API. A dupla implementação
+(Quarkus + Rails) era meta adicional autoimposta — um instrumento para provar,
+na prática, que o contrato era implementável de forma independente por dois
+ecossistemas distintos.
+
+**Por quê (trade-off tempo vs. profundidade)**: com o tempo disponível, a
+escolha real era entre duas implementações rasas ou uma funda. Optou-se por
+profundidade na stack única, e foi isso que o tempo recuperado comprou:
+
+- **Mutation testing (PIT)** nas camadas de domínio e aplicação, com 100% de
+  kill rate — os testes unitários provam as regras de negócio, não apenas as
+  alcançam;
+- **Suíte de contrato validada por schema** contra `spec/openapi.yaml`, com
+  matriz de cobertura auditada pelo `contract-tester`;
+- **Emendas de spec descobertas pela implementação** e promovidas a texto
+  normativo com revisão adversarial (mapeamento de falha de parse, forma
+  canônica de UUID — ver item 3).
+
+**O que o corte NÃO invalida**: todo o trabalho de fechamento de divergência
+cross-stack feito na spec — ordenação determinística de listagens, datetimes
+UTC com `Z` literal, forma canônica de UUID, mapeamento de falha de parse para
+RFC 7807, o modelo de precedência 400 → 404 → 422 — permanece na spec e
+permanece valioso. Essas decisões nunca foram "custo do Rails": são o que
+torna o contrato **independente de implementação**, que é exatamente a
+alegação central de SDD. Uma segunda implementação (Rails ou qualquer outra)
+continua construível a partir do contrato sozinho, sem engenharia reversa da
+implementação Java — o corte remove a *demonstração* da propriedade, não a
+propriedade.

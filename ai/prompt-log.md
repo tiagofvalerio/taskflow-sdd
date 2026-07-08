@@ -1586,3 +1586,47 @@ One by one — I decide each.
 **2026-07-07 18:20**
 
 /log-ai PIT no domínio+aplicação Quarkus — score 100%, sobreviventes triados um a um
+
+---
+**2026-07-07 18:28**
+
+Scope decision: the Rails implementation is cut — the project delivers the
+Quarkus implementation only. The challenge asks for one API; the dual-stack was
+a self-imposed stretch goal, cut for time in favor of depth on one stack
+(mutation testing, schema-validated contract suite, spec amendments). Update
+all repo artifacts consistently:
+
+1. CLAUDE.md: remove the rails-impl stack entry, the Ruby mentoring mode
+   section, and Rails commands; reword the Architecture section for a single
+   stack (keep the rich-domain/hexagonal content intact).
+2. spec/openapi.yaml: remove the Rails server entry (localhost:3000); scan
+   info.description for wording assuming two implementations (e.g. the
+   tolerant-query-params bullet mentioning "both target frameworks") and
+   reword to implementation-neutral phrasing. The contract itself changes in
+   NOTHING — this is prose only. Flag every line you touch.
+3. docs/decisoes.md: rewrite the asymmetric-architecture section (§2) as the
+   architecture of the delivered implementation, and add a new "Decisões de
+   escopo" entry: the dual-stack goal, why it was cut (time vs depth
+   trade-off), what was prioritized instead, and the note that all
+   cross-stack-divergence work in the spec (ordering, datetimes, UUID form,
+   parse-failure mapping, precedence) remains valuable — it makes the contract
+   implementation-independent, which IS the SDD claim.
+4. ai/skills.md: remove/reword the Java→Ruby translation and Ruby-mentoring
+   delegation rows; note the scope change in the process observations.
+5. Delete rails-impl/ (empty scaffold dir) if present.
+Show me the decisoes.md scope entry before writing the rest.
+
+---
+**2026-07-07 22:30**
+
+continue
+
+---
+**2026-07-07 22:34**
+
+/revisar decisão de escopo: implementação Rails cortada — o desafio pede uma API; o dual-stack era meta auto-imposta. Corte por tempo, trocando amplitude por profundidade já entregue (mutação, suíte validada por schema, emendas de spec). Artefatos atualizados em consistência; contrato inalterado.
+
+---
+**2026-07-07 22:36**
+
+/log-ai atualização de escopo — projeto single-stack (Quarkus)

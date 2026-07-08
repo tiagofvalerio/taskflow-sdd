@@ -12,8 +12,8 @@ info:
       defined order (`createdAt` ascending, `id` ascending as tie-breaker —
       see each operation's description). This is a deliberate scope
       decision for this challenge, not an oversight. Ordering is part of
-      the contract, not an implementation detail left to each stack's
-      database defaults, and is covered by contract tests. A future
+      the contract, not an implementation detail left to an
+      implementation's database defaults, and is covered by contract tests. A future
       revision may introduce `limit`/`cursor` query params without breaking
       existing clients, since the response is currently a bare array.
     - **No `DELETE /projetos`.** Deleting a project is out of scope for this
@@ -65,9 +65,11 @@ info:
       error alongside it. Rationale: the path parameter identifies *which*
       resource the request addresses, so it's meaningless to validate
       anything else before that's settled; this also matches the native
-      behavior of both target frameworks (JAX-RS resolves path parameters
-      before invoking body validation; Rails routing resolves path segments
-      before the controller parses params). This ordering applies to every
+      behavior of mainstream HTTP frameworks (e.g. JAX-RS resolves path
+      parameters before invoking body validation; Rails routing resolves
+      path segments before the controller parses params), so no
+      implementation needs to fight its framework to conform. This
+      ordering applies to every
       operation with more than one category to check — `PATCH
       /projetos/{id}`, `POST /projetos/{id}/tarefas`, `GET
       /projetos/{id}/tarefas`, and `PATCH /tarefas/{id}`. Within the `422`
@@ -101,8 +103,8 @@ info:
       single entry `field: body`; a parseable body with unbindable
       values is fail-fast in document order and reports only the first
       unbindable field — binding aborts before schema validation can see
-      the rest. This mapping is contractual — it is not left to each
-      framework's native parse-error response.
+      the rest. This mapping is contractual — it is not left to the
+      implementing framework's native parse-error response.
     - **Path ids are canonical UUIDs.** `format: uuid` on the `id` path
       parameters means the canonical RFC 4122 textual form — 8-4-4-4-12
       hexadecimal digits — not whatever a platform parser happens to
@@ -117,16 +119,17 @@ info:
       containing a parameter the operation doesn't declare (e.g. `?foo=bar`)
       is not rejected — the extra parameter is silently ignored (tolerant
       reader). This is deliberate, not an oversight: it matches the native
-      default behavior of both target frameworks, and unlike request
+      default behavior of mainstream HTTP frameworks, and unlike request
       bodies, query strings have no `additionalProperties: false`-style
       closed-schema mechanism in OpenAPI 3.0 to enforce otherwise.
     - **Datetime output is always UTC, `Z`-suffixed.** Every `date-time`
       field (`createdAt`, `completedAt`) is serialized as RFC 3339 UTC with
       a literal `Z` suffix (e.g. `2024-01-01T10:00:00Z`) — an explicit
       numeric offset (e.g. `-03:00`) is never emitted. This is part of the
-      contract, not left to each stack's framework/timezone defaults
-      (Quarkus/Jackson vs. Rails' `ActiveSupport::TimeWithZone`, which
-      differ here out of the box), and is covered by contract tests.
+      contract, not left to framework/timezone serialization defaults,
+      which differ across ecosystems out of the box (e.g. Jackson emits
+      `Z` while Rails' `ActiveSupport::TimeWithZone` emits a numeric
+      offset), and is covered by contract tests.
     - **Trailing slash is not part of the contract.** Canonical paths have
       no trailing slash (e.g. `/projetos`, never `/projetos/`). Requests to
       a non-canonical form are outside the contract: behavior is
@@ -176,8 +179,6 @@ info:
 servers:
   - url: http://localhost:8080
     description: Quarkus implementation (local dev)
-  - url: http://localhost:3000
-    description: Rails implementation (local dev)
   # Production URLs added post-deploy.
 
 tags:

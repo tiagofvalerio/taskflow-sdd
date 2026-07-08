@@ -1,5 +1,4 @@
-
-# TaskFlow — SDD Challenge (Quarkus + Rails)
+# TaskFlow — SDD Challenge (Quarkus)
 
 ## Non-negotiable methodology
 - This project follows Specification-Driven Development. `spec/openapi.yaml` is the
@@ -10,14 +9,11 @@
   returns 422 with a specific `type` URI defined in the spec.
 
 ## Architecture
-- Both stacks share a RICH domain model philosophy; each is idiomatic to its ecosystem:
-  - Quarkus: hexagonal architecture. Domain layer has ZERO framework imports
-    (no Jakarta/JPA/Quarkus). JPA entities live only in adapters, with mappers.
-  - Rails: idiomatic Rails-way. Business rules live in ActiveRecord models
-    (rich models), controllers stay thin, standard Rails conventions apply
-    (validations, scopes, strong params, rubocop-rails-omakase style).
-- In BOTH stacks: business rules live in the model/entity, never in controllers.
-- Invariants enforced in the model/domain layer:
+- RICH domain model, hexagonal architecture. Domain layer has ZERO framework
+  imports (no Jakarta/JPA/Quarkus). JPA entities live only in adapters, with
+  mappers.
+- Business rules live in the domain entity, never in resources/controllers.
+- Invariants enforced in the domain layer:
   1. Project can only be archived if no task is in_progress (422)
   2. Only pending tasks can be deleted (422)
   3. completedAt is set internally by Task#complete — never accepted as input
@@ -28,19 +24,9 @@
   6. Task status cannot change while its project is archived; all other
      patchable fields (title, description, priority) remain editable (422)
 
-## Stacks
+## Stack
 - `quarkus-impl/`: Java 25, Quarkus 3.x, JPA/Panache only in adapters, JUnit 5,
   RestAssured, Testcontainers (PostgreSQL), PIT mutation testing on domain+application.
-- `rails-impl/`: Ruby on Rails (API-only, latest stable), rich ActiveRecord models,
-  RSpec request specs, committee gem for OpenAPI conformance, FactoryBot,
-  rubocop with rails-omakase style.
-
-## Ruby mentoring mode (I am new to Ruby)
-- In rails-impl/, whenever you write Ruby, add a short "Ruby notes" summary after
-  the code: idioms used (blocks, symbols, bang methods, callbacks, concerns) and
-  why they're conventional. Keep it brief — 3-5 bullets max.
-- Prefer the boring, conventional Rails solution over clever metaprogramming.
-- Flag anything a Rails interviewer would expect me to be able to explain.
 
 ## AI documentation discipline (challenge requirement)
 - After any significant generation, remind me to run /log-ai.
@@ -49,7 +35,6 @@
 
 ## Commands
 - Quarkus: `cd quarkus-impl && ./mvnw quarkus:dev` | test: `./mvnw verify`
-- Rails: `cd rails-impl && bin/rails s` | test: `bundle exec rspec`
 
 ## Git
 - Conventional commits ALWAYS (feat:, fix:, chore:, docs:, test:, ci:) —

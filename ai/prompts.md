@@ -947,3 +947,53 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    gerados pela própria IA em fases anteriores (asserção unilateral
    mascarada por 99% de cobertura de linha) — análise honesta em
    `ai/revisoes.md`, entrada 15.
+
+## 19. Atualização de escopo — projeto single-stack (Quarkus)
+
+1. **Contexto** — Revisão de escopo pós-mutação: a implementação Rails
+   (meta autoimposta; o desafio pede uma API) foi cortada em favor de
+   profundidade na stack única — mutação 100%, suíte de contrato
+   validada por schema, emendas de spec. Todos os artefatos do repo
+   precisavam refletir o corte de forma consistente.
+
+2. **Prompt (resumo)** — Decisão de escopo anunciada com plano de 5
+   itens: (1) `CLAUDE.md` sem stack Rails, sem mentoria Ruby, sem
+   comandos Rails, arquitetura reescrita para stack única; (2)
+   `spec/openapi.yaml` sem o servidor `:3000` e com `info.description`
+   varrida por prosa que assuma duas implementações — mudança SÓ de
+   prosa, contrato intocado, cada linha tocada flagrada; (3)
+   `docs/decisoes.md` com §2 reescrito como arquitetura da entrega e
+   entrada nova de decisão de escopo (trade-off tempo vs. profundidade
+   + nota de que o trabalho cross-stack da spec permanece válido — é o
+   que torna o contrato independente de implementação, a própria tese
+   de SDD); (4) `ai/skills.md` sem as linhas de delegação Ruby, com
+   observação de processo; (5) deletar `rails-impl/` vazio. Gate de
+   revisão: mostrar o rascunho da entrada de decisoes.md antes de tocar
+   o resto.
+
+3. **O que a IA produziu** —
+   - Rascunho do §10 de `docs/decisoes.md` apresentado antes de
+     qualquer edição, junto com um achado fora da lista: Rails
+     entranhado em decisoes.md além do §2 (§1, §3, §4, §6, §7, §8, §9)
+     — pergunta estruturada com 3 tratamentos; escolhido rewrite leve.
+   - Os 5 itens executados: `CLAUDE.md` single-stack; 6 pontos de prosa
+     na spec flagrados um a um (menções a Rails sobrevivem só como
+     exemplos ilustrativos de divergência entre ecossistemas, não como
+     framework-alvo; YAML revalidado, 1 servidor); `decisoes.md` com §2
+     reescrito (tabela de regras em coluna única, alternativa rejeitada
+     trocada para modelo anêmico, nota histórica curta sobre a
+     assimetria planejada) + §10 + rewrite leve das demais seções;
+     `ai/skills.md` atualizado; `rails-impl/` deletado.
+   - Varredura residual além da lista: 3 arquivos de `.claude/` ainda
+     dirigiam a IA para o stack morto (`domain-guardian` com seção Ruby
+     inteira, `contract-tester` citando `committee`, `sdd-check`
+     aceitando `rails-impl`) — corrigidos; contagem defasada "5
+     business rules" (anterior à regra 6) corrigida para 6. Logs
+     históricos (`ai/prompt-log.md`, `prompts.md`, `revisoes.md`)
+     deliberadamente intocados — são registro.
+
+4. **Resultado** — Aceito com direção humana nos dois gates (rascunho
+   do §10 aprovado antes do resto; tratamento das seções residuais
+   escolhido entre opções). Análise de processo em `ai/revisoes.md`,
+   entrada 16 — inclusive o ponto de que a IA nunca questionou a
+   viabilidade do dual-stack em nenhuma sessão anterior.
