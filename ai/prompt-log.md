@@ -1800,3 +1800,121 @@ Files reviewed: `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml
 **2026-07-08 18:30**
 
 /log-ai fechamento da lacuna prosa-vs-schema exposta pelo Schemathesis — patterns regex de UUID canônico (case-insensitive, conforme decisão documentada) e não-branco em name/title, com passe de confirmação do spec-reviewer e 162 testes revalidados
+
+---
+**2026-07-08 18:37**
+
+Read /tmp/ci-fail2.log — failed-step logs from the latest pipeline run. Three
+jobs failed; test/spec-lint now pass. For EACH failing job quote the root-cause
+line and classify (a) config/wiring vs (b) genuine finding, propose a fix, wait
+for my call:
+
+1. contract (Schemathesis) — it passed setup, booted, and ran, then the
+   Schemathesis step failed. Is this a NEW real finding (another spec-vs-code
+   discrepancy the fuzzer found), or did our own tightening (UUID/non-blank
+   patterns) make Schemathesis now generate/expect something that fails? This
+   one I care about most — do not silence it, diagnose it.
+2. security (Snyk) — first time Snyk actually scanned. Is the failure a real
+   fixable high/critical vuln (which dependency, is there a fixed version), or
+   a transitive vuln with no fix available? Show the CVE(s) and advise.
+3. sonar — quality gate failed. Show me exactly what failed the gate: coverage
+   below threshold, code smells, security hotspots, duplications — with numbers.
+
+---
+**2026-07-08 18:51**
+
+Apply both fixes you proposed:
+
+1. contract: replace the name/title pattern at all 4 locations with the
+   control-char-excluding version ^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*$. First verify
+   the regex's character class rejects EXACTLY the same characters as
+   BodyValidation.hasControlChar (Character.isISOControl = 0x00-0x1F, 0x7F-0x9F).
+   Then run the spec-reviewer agent on the change (it amends the frozen spec),
+   and re-run the full suite locally to confirm the 4 failing cases now pass.
+   Add a note to decisoes.md that this completes the control-char rule in the schema.
+
+2. security: add --force-maven-cli to the Snyk args as you proposed.
+
+Show me the spec-reviewer result, then stop.
+
+---
+**2026-07-08 18:57**
+
+<task-notification>
+<task-id>a841e92cd394d387e</task-id>
+<tool-use-id>toolu_01RLcaF5NdN2T3CB8yFqLMtY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/6d66ccc0-a0ff-49ea-8cde-bf3dfa2c360f/tasks/a841e92cd394d387e.output</output-file>
+<status>completed</status>
+<summary>Agent "Spec-reviewer pass on control-char pattern fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verification complete. Findings below, structured per your 3 points.
+
+## Point 1 — Regex correctness
+
+**Boundary correctness: CONFIRMED-correct.** `\x1F` (31) and `\x7F`/`\x9F` (127/159) match `Character.isISOControl`'s definition exactly (0x00–0x1F, 0x7F–0x9F inclusive on both ends). No off-by-one.
+
+**`(?![\s\S])` as end-anchor: CONFIRMED-correct.** This is a standard, sound idiom — it asserts "no character matches here," i.e. true end of string, regardless of multiline/dotall flags. It does not degrade or match spuriously. Your reasoning about Python's `re` bare-`$` trailing-`\n` quirk is accurate (JS's `$` without the `m` flag does *not* have that quirk — it already means true end-of-string — but using the lookahead form is still correct and harmless there, just not strictly necessary for JS).
+
+**PLAUSIBLE-issue-found: engine divergence via `.` exclusions, not ReDoS.** No catastrophic-backtracking risk exists (agreed, moot given field length bounds). But there *is* a genuine correctness divergence between Python's `re` (what you tested) and ECMA-262 (what you cite as the nominal target flavor), centered on which characters `.` excludes by default:
+
+- Python's `.` (no `DOTALL`) excludes only `\n` (0x0A).
+- ECMA-262's `.` (no `s` flag) excludes the full LineTerminator set: `\n` (0x0A), `\r` (0x0D), **U+2028 LINE SEPARATOR**, **U+2029 PARAGRAPH SEPARATOR**.
+
+`\n`/`\r` are already inside your excluded control range, so no new issue there. But U+2028/U+2029 are *not* ISO control characters (`Character.isISOControl(0x2028)` is `false`) — per the business rule they should be **permitted**, non-blank-qualifying characters. Concretely, for the string `"\u2028X"`:
+
+- **Python**: `.` in the `(?=.*\S)` lookahead *can* step over `\u2028` (it only excludes `\n`), reaches `X`, lookahead succeeds → string **accepted**. This matches intended behavior.
+- **ECMA-262/JS** (ajv, browsers, Node — any non-Python validator of this same spec): `.` cannot step over `\u2028` (it's a LineTerminator), and `\S` also fails to match `\u2028` directly because JS's `\s`/`\S` classes include U+2028/U+2029 (per spec, White_Space + LineTerminator code points). The lookahead fails on both branches → string **wrongly rejected**, even though it contains a non-blank char and no ISO control character.
+
+This means two spec-compliant validators (Python-based Schemathesis vs. a JS/ajv-based client or contract test) will disagree on this input — exactly the "different implementers, different behavior" risk this review is meant to catch.
+
+Additionally: the claimed "verified across the full codepoint sweep 0x00–0x24F ... zero mismatches" **does not actually cover this gap** — 0x2028/0x2029 are well outside the 0x00–0x24F sweep range tested. So the empirical verification, while real, doesn't validate the exact codepoints where the divergence occurs.
+
+Practical severity: narrow (requires U+2028/U+2029 specifically, positioned so `.*` must traverse it to reach a `\S`), but real and reproducible. Not a blocker for Schemathesis-only validation (which is Python-based and will pass locally as you found), but a latent spec-ambiguity if any other tooling/frontend validates this pattern per strict ECMA-262 semantics.
+
+## Point 2 — Consistency with existing examples
+
+**CONFIRMED-correct.** I re-checked `ProjectNameInvalid` (~line 998–1007) and `TaskTitleInvalid` (~line 1020–1029), plus swept the whole file for `name:`/`title:` usages and for any raw bytes in 0x80–0x9F or tab characters:
+
+- Both examples only contain descriptive Portuguese *error-message* text (`"não pode estar em branco e deve ter no máximo 100 caracteres"` / `...200 caracteres`), not actual field-value examples subject to the pattern.
+- No other component example anywhere in the spec populates an actual `name`/`title` field value (all other `title:`/`name:` occurrences are either ProblemDetails `title` strings, schema property keys, or parameter names — none are sample request-body field content).
+- Grep for `[\x80-\x9F]` and literal tabs across the entire file: zero matches. No example collides with the C1 control block or uses raw control bytes.
+
+Nothing currently documented as "valid" would be newly rejected by the tightened pattern.
+
+## Point 3 — Scope of the change
+
+**CONFIRMED-correct.** The new pattern appears at exactly 4 locations — lines 763, 784, 851, 879 — matching your report exactly, no 5th occurrence anywhere in the file. At all 4 sites, `minLength`/`maxLength` remain present and unchanged immediately alongside the new `pattern` line:
+
+- 761–763 (`CreateProjectRequest.name`): `minLength: 1`, `maxLength: 100`, pattern
+- 782–784 (`UpdateProjectRequest.name`): `minLength: 1`, `maxLength: 100`, pattern
+- 849–851 (`CreateTaskRequest.title`): `minLength: 1`, `maxLength: 200`, pattern
+- 877–879 (`UpdateTaskRequest.title`): `minLength: 1`, `maxLength: 200`, pattern
+
+The `Task` response schema's `title` (line ~804–807) correctly retains no pattern, since it's a server-emitted representation field, not a request field — no drift into response schemas.
+
+## Summary
+
+| Point | Verdict |
+|---|---|
+| 1a — range boundaries | CONFIRMED-correct |
+| 1b — `(?![\s\S])` end-anchor idiom | CONFIRMED-correct |
+| 1c — ReDoS / pathological backtracking | CONFIRMED-correct (no risk) |
+| 1d — cross-engine correctness (`.` exclusion sets) | **PLAUSIBLE-issue-found** — U+2028/U+2029 diverge between Python `re` and ECMA-262; untested by the cited codepoint sweep |
+| 2 — existing examples still valid | CONFIRMED-correct |
+| 3 — scope (4 locations, minLength/maxLength intact) | CONFIRMED-correct |
+
+Recommendation if you want to close the point-1 gap: either (a) explicitly scope this pattern's authority to "as evaluated by Java's `Character.isISOControl` at the server" in prose (accepting that edge-case client-side/JS validators may diverge on U+2028/U+2029), or (b) harden the lookahead to `(?=[\s\S]*\S)` instead of `(?=.*\S)` — replacing `.` with `[\s\S]` closes the exact gap identified, since `[\s\S]` matches any character with no LineTerminator exclusions in either engine, making the lookahead engine-agnostic. This is a one-character-class swap, not a redesign, if you choose to act on it.
+
+File reviewed: `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` (lines 761–888 for the 4 pattern sites, 936–1040 for the examples cross-check).</result>
+<usage><subagent_tokens>28544</subagent_tokens><tool_uses>10</tool_uses><duration_ms>185593</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-08 18:58**
+
+/revisar Schemathesis pegou a outra metade da lacuna de controle: schema formalizava "não-branco" mas não "sem caracteres de controle", embora código e decisoes.md já testassem a regra. Correção: pattern excluindo C0/DEL/C1. Snyk: container tropeçava no checksum do wrapper (wrapper verificado íntegro) — resolvido com --force-maven-cli. Lição: formalizar metade de uma regra no schema deixa a outra metade como drift latente.
+
+---
+**2026-07-08 19:00**
+
+/log-ai correção de pipeline round 2 — pattern control-char no schema, --force-maven-cli no Snyk

@@ -540,3 +540,40 @@ porque contradiz a decisão já fixada no item 3 (case-insensitive é
 deliberado, não descuido) e quebraria `uppercaseHexUuidPassesPathValidation`.
 O `pattern` aplicado usa `[0-9a-fA-F]`, não `[0-9a-f]`, exatamente para não
 reabrir essa decisão.
+
+**Addendum — o pattern de `name`/`title` precisou de uma segunda volta**:
+a primeira versão do pattern (`.*\S.*`) só formalizava "não-branco"; a
+primeira execução real do CI contra ela achou uma categoria nova de "API
+rejected schema-compliant request" — Schemathesis gerou strings com
+caracteres de controle ASCII reais (ex. BEL, FS) misturados com texto
+normal, que satisfazem `.*\S.*` (caractere de controle não é whitespace)
+mas que `BodyValidation.hasControlChar` corretamente rejeita (regra que já
+existia, também sem representação no schema). Pattern final, nos 4 pontos
+(`CreateProjectRequest.name`, `UpdateProjectRequest.name`,
+`CreateTaskRequest.title`, `UpdateTaskRequest.title`):
+
+```
+^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*(?![\s\S])
+```
+
+Exclui exatamente os mesmos codepoints que `Character.isISOControl` (C0
+`0x00`–`0x1F`, DEL+C1 `0x7F`–`0x9F`) — verificado por varredura completa
+0x00–0x24F em Python (motor usado pelo Schemathesis) e no V8/Node (motor
+ECMA-262, o que a spec OpenAPI declara para `pattern`), zero divergências.
+
+O final `(?![\s\S])` no lugar de um `$` simples não é cosmético: o `$` do
+Python (e do Java) casa tanto no fim absoluto da string quanto na posição
+logo antes de um `\n` final isolado — então uma string terminando em
+`\n` (ela própria um caractere de controle, já excluído da classe)
+escaparia da exclusão por essa brecha do `$`. Achado e confirmado
+empiricamente (`"A\n"` casava com `$` e não devia) antes de trocar para o
+lookahead, que não tem essa exceção em nenhum dos dois motores.
+
+**O que este addendum NÃO fecha**: a mesma execução de verificação local
+(Schemathesis com a seed do achado original) mostrou o mesmo padrão agora
+migrado para `description` — que tem `maxLength: 2000` no schema mas
+nenhum `pattern`, embora `BodyValidation.invalidDescription` já chame o
+mesmo `hasControlChar`. `description` é nullable/opcional (branco é válido
+ali, diferente de `name`/`title`), então o pattern não pode ser
+`.*\S.*`-based — precisa só da parte de exclusão de controle. Ainda não
+aplicado; registrado aqui para não se perder antes da próxima rodada.

@@ -1053,3 +1053,69 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    entrada 17 — inclusive o ponto de que fuzzing baseado em schema acha
    uma categoria de lacuna (fidelidade schema formal) que revisão
    humana de prosa não acha.
+
+## 21. Correção de pipeline round 2 — pattern control-char no schema, `--force-maven-cli` no Snyk
+
+1. **Contexto** — Segunda execução real do pipeline de CI após o
+   fechamento do item 20. Três jobs falharam: `contract` (Schemathesis
+   achou uma categoria nova de falha), `security` (Snyk nunca chegou a
+   escanear), `sonar` (quality gate falhou sem detalhe visível no log).
+   Sessão anterior triou e classificou os três (config/wiring vs achado
+   genuíno) e propôs correções, aguardando aprovação para os dois
+   primeiros — `sonar` ficou pendente por falta de acesso a
+   `SONAR_TOKEN` para puxar a condição exata do dashboard.
+
+2. **Prompt (resumo)** — Aprovadas as duas correções propostas com
+   condições de verificação explícitas: (1) contract — trocar o pattern
+   de `name`/`title` pela versão que também exclui caracteres de
+   controle, mas PRIMEIRO verificar que a classe de caracteres do regex
+   rejeita exatamente os mesmos codepoints que
+   `Character.isISOControl` (0x00–0x1F, 0x7F–0x9F); depois rodar
+   `spec-reviewer` como confirmação dedicada (emenda à spec congelada) e
+   revalidar a suíte completa confirmando que os 4 casos que falhavam
+   agora passam; e anotar em `decisoes.md` que isso fecha a regra de
+   caractere de controle no schema; (2) security — adicionar
+   `--force-maven-cli` aos args do Snyk. Mostrar o resultado do
+   `spec-reviewer` e parar.
+
+3. **O que a IA produziu** —
+   - Verificação do regex ANTES de aplicar: varredura Python de
+     0x00–0x9F comparando contra `Character.isISOControl` achou um bug
+     no próprio regex proposto (`^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*$`) — o
+     `$` do Python (e do Java) casa também logo antes de um `\n` final
+     isolado, deixando `"A\n"` passar quando não devia. Corrigido para
+     `^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*(?![\s\S])`, revalidado em Python E
+     em Node/V8 (motor ECMA-262) com varredura completa 0x00–0x24F,
+     zero divergências.
+   - Pattern aplicado nos 4 pontos (`CreateProjectRequest.name`,
+     `UpdateProjectRequest.name`, `CreateTaskRequest.title`,
+     `UpdateTaskRequest.title`).
+   - `spec-reviewer` disparado como confirmação dedicada.
+   - Verificação local: suíte Java completa (162/162, não exercita o
+     pattern diretamente — validação client-side desligada) MAIS um
+     boot manual da app com Schemathesis rodado com a mesma seed do
+     achado original, confirmando os 4 casos resolvidos — e expondo um
+     quinto, adjacente: `description` tem a mesma regra no código
+     (`BodyValidation.invalidDescription` também chama
+     `hasControlChar`) e nenhum pattern no schema. Fora do escopo desta
+     rodada (aprovação era só `name`/`title`); reportado, não corrigido,
+     anotado em `decisoes.md` item 12 como pendência.
+   - `--force-maven-cli` adicionado aos args do Snyk em `ci.yml`.
+   - `docs/decisoes.md` item 12 recebeu um addendum com o racional
+     completo (o bug do `$`, a troca para o lookahead, e a pendência do
+     `description`).
+
+4. **Resultado** — Aceito com uma ressalva do `spec-reviewer`: achou uma
+   quarta camada de divergência que nem a verificação da IA nem o
+   `spec-reviewer` anterior (item 20) tinham pego — `(?=.*\S)` usa `.`,
+   que no Python exclui só `\n` mas no ECMA-262 (motor nominal da spec)
+   também exclui U+2028/U+2029, que não são caracteres de controle e
+   deveriam ser aceitos. A varredura de codepoints da IA (0x00–0x24F)
+   nunca tocou essa faixa. Correção sugerida pelo `spec-reviewer`
+   (`(?=.*\S)` → `(?=[\s\S]*\S)`) reportada ao usuário, não aplicada —
+   aguardando decisão. Análise de processo completa em
+   `ai/revisoes.md`, entrada 18: três rodadas (14, 17, 18) desta mesma
+   série de achados, cada uma fechando parte do problema e abrindo a
+   próxima camada — nenhuma camada de verificação sozinha (revisão
+   humana, teste, fuzzing, autoverificação da IA, `spec-reviewer`) pegou
+   tudo; só a composição delas foi reduzindo a superfície.

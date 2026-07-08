@@ -760,7 +760,7 @@ components:
           type: string
           minLength: 1
           maxLength: 100
-          pattern: '.*\S.*'
+          pattern: '^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         description:
           type: string
           nullable: true
@@ -781,7 +781,7 @@ components:
           type: string
           minLength: 1
           maxLength: 100
-          pattern: '.*\S.*'
+          pattern: '^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         description:
           type: string
           nullable: true
@@ -848,7 +848,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
-          pattern: '.*\S.*'
+          pattern: '^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         description:
           type: string
           nullable: true
@@ -876,7 +876,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
-          pattern: '.*\S.*'
+          pattern: '^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         description:
           type: string
           nullable: true

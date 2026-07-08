@@ -1000,3 +1000,78 @@ incompleta, e por quê — não é um changelog de features.
    depois ainda vale, mas transforma toda emenda subsequente em mudança
    de artefato já "fechado" — daí o cuidado extra (spec-reviewer
    dedicado) que esta emenda específica recebeu.
+
+## 18. Meio-fechamento do item 17 — o pattern de "não-branco" formalizou metade da regra e escondeu a outra metade
+
+1. **Data / Fase** — 2026-07-08, execução seguinte do pipeline de CI
+   após o fechamento do item 17 (patterns de UUID canônico e não-branco
+   já aplicados e "confirmados" pelo `spec-reviewer`).
+
+2. **O que a IA sugeriu** — No item 17, o pattern aplicado a
+   `name`/`title` foi `pattern: '.*\S.*'` — só a metade "não pode estar
+   em branco" da mensagem de exemplo (`ProjectNameInvalid`/
+   `TaskTitleInvalid`: "não pode estar em branco **e** deve ter no
+   máximo N caracteres"). A implementação (`BodyValidation.hasControlChar`,
+   chamada por `invalidText` desde uma correção anterior desta mesma
+   sessão) também rejeita qualquer caractere de controle — regra que já
+   existia, já testada, já documentada — mas essa segunda metade nunca
+   virou `pattern` no schema. O `spec-reviewer` disparado no item 17
+   revisou exatamente esse pattern e não achou o problema, porque a
+   pergunta feita a ele foi "esse regex está correto para 'não-branco'?"
+   — nunca "esse regex cobre TODA a regra que o código aplica?". O
+   escopo da pergunta limitou o que a revisão podia achar.
+
+3. **Problema identificado** — Schemathesis, rodando contra a API real,
+   gerou strings com caracteres de controle ASCII reais (0x07 BEL,
+   0x1C FS) misturados com texto comum (`"=A"`) — que satisfazem
+   `.*\S.*` (caractere de controle não é whitespace) mas que a API
+   corretamente rejeita. 4 falhas de "API rejected schema-compliant
+   request" — a mesma categoria do item 17, não uma nova: formalizar
+   *parte* de uma regra existente no schema deixa a parte não-formalizada
+   exatamente tão invisível para fuzzing quanto estava antes de qualquer
+   pattern existir. Meio-fechamento tem o mesmo efeito prático que
+   nenhum fechamento, para a parte que ficou de fora.
+
+4. **Correção aplicada** — Antes de aplicar, a IA testou o próprio
+   regex proposto (`^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*$`) contra os 256
+   codepoints 0x00–0xFF em Python e achou um bug nele mesmo: o `$` do
+   Python (e do Java) casa tanto no fim absoluto da string quanto na
+   posição logo antes de um `\n` final isolado — `"A\n"` casava com o
+   pattern quando não devia (`\n` é caractere de controle). Trocado
+   `$` por `(?![\s\S])` (lookahead de "nenhum caractere segue"), que não
+   tem essa exceção em nenhum motor, e essa versão foi validada em
+   Python E em Node/V8 (o motor ECMA-262 que a OpenAPI declara) antes de
+   ser aplicada nos 4 pontos. Rodada local do Schemathesis com a mesma
+   seed do achado original confirmou os 4 casos resolvidos — mas expôs
+   um quinto, adjacente: `description` tem a mesma `hasControlChar` no
+   código e nenhum pattern no schema (não estava no escopo desta
+   rodada — `description` é opcional/nullable, então o pattern não pode
+   ser o mesmo `.*\S.*`-based; registrado em `docs/decisoes.md` item 12
+   como pendência, não aplicado ainda). O `spec-reviewer` rodado nesta
+   emenda, por sua vez, achou uma quarta camada: `(?=.*\S)` usa `.`, e
+   o `.` do Python exclui só `\n`, enquanto o `.` do ECMA-262 (o motor
+   nominal da spec) também exclui U+2028/U+2029 — que não são
+   caracteres de controle e deveriam ser aceitos, mas um validador JS
+   estrito os rejeitaria via esse pattern. A varredura de codepoints
+   feita pela IA (0x00–0x24F) nunca tocou U+2028/U+2029 — não cobria o
+   ponto exato da divergência. Achado reportado ao usuário, correção
+   (`(?=.*\S)` → `(?=[\s\S]*\S)`) ainda não aplicada, aguardando decisão.
+
+5. **Lição** — Cada rodada desta série (itens 14, 17, 18) fechou um
+   pouco e abriu o próximo: 6 rodadas de revisão de prosa não acharam a
+   lacuna schema-vs-prosa (item 17); a primeira correção do schema
+   formalizou só metade de uma regra e a fuzzing achou a outra metade
+   (este item); a correção da segunda metade tinha um bug de motor de
+   regex que só apareceu numa varredura de codepoints feita pela própria
+   IA antes de aplicar; e mesmo essa versão corrigida tinha uma
+   divergência de engine que só o `spec-reviewer` achou, numa faixa de
+   codepoints que a varredura da IA nunca tinha testado. Nenhuma camada
+   de verificação (revisão humana, teste de código, fuzzing de contrato,
+   verificação própria da IA, revisão adversarial de agente) pegou
+   tudo sozinha — cada uma pegou uma fatia diferente do mesmo problema
+   recorrente, e só a composição delas, rodada após rodada, foi reduzindo
+   a superfície do que sobrava. Dirigir IA em domínio de correção formal
+   (regex, schema) exige pedir verificação *específica e exaustiva*
+   ("varra todos os codepoints", "teste em dois motores") — pedir só
+   "isso está certo?" produz uma confirmação tão limitada quanto o
+   escopo da pergunta.
