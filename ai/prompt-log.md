@@ -2034,3 +2034,41 @@ regression — flag it and wait for my call.
 **2026-07-08 19:46**
 
 /log-ai fix do Snyk — flag correta --maven-skip-wrapper (a anterior era fabricada), com verificação de que o scan realmente executa
+
+---
+**2026-07-08 19:52**
+
+Read /tmp/snyk-fail.log — only the Snyk step failed now (everything else green).
+Last fix was --force-maven-cli -> --maven-skip-wrapper. Which is it:
+1. Same "Failed to validate Maven distribution SHA-256" error again -> the flag
+   still isn't taking effect (wrong placement, or the bundled image CLI predates
+   the flag despite the rebuild date). Show the exact error.
+2. A DIFFERENT error -> the flag worked, Snyk got past Maven, and now fails for
+   a new reason (a real high/critical CVE, or a different config issue). If it's
+   a CVE: name the dependency, the vuln, and whether a fixed version exists.
+Quote the root-cause line and classify before proposing anything.
+
+---
+**2026-07-08 19:55**
+
+Approved: pin org.postgresql:postgresql to 42.7.12 to resolve
+SNYK-JAVA-ORGPOSTGRESQL-17874248. Conditions:
+1. Pin via dependencyManagement in quarkus-impl/pom.xml with a version property
+   override (Quarkus BOM pulls 42.7.11 transitively; the override must win over
+   the BOM). Verify the resolved version is actually 42.7.12 after the change:
+   ./mvnw dependency:tree | grep postgresql should show 42.7.12, not 42.7.11.
+2. Re-run the full suite (./mvnw verify) — the driver bump must not break the
+   Testcontainers integration tests. 42.7.11 -> 42.7.12 is a patch bump so it
+   should be safe, but confirm green.
+3. Confirm Snyk now passes locally if possible, or note that the next CI run
+   verifies it.
+
+---
+**2026-07-08 19:57**
+
+/revisar o gate de segurança provou seu valor: assim que o Snyk finalmente escaneou (após o fix da flag), pegou uma CVE real de alta severidade — SNYK-JAVA-ORGPOSTGRESQL-17874248 no driver postgresql 42.7.11, puxado transitivamente pelo quarkus-jdbc-postgresql, com correção disponível (42.7.12). Resolvido com override em dependencyManagement acima do BOM do Quarkus, verificado via dependency:tree. Lição: dependências transitivas de um BOM confiável ainda carregam vulneráveis; sem o scan, essa teria ido para produção silenciosamente.
+
+---
+**2026-07-08 19:58**
+
+/log-ai fix de segurança — pin postgresql 42.7.12 resolvendo CVE alta pega pelo Snyk

@@ -1239,3 +1239,54 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    log de CI) — condição do usuário para fechar: citar a linha exata do
    log mostrando que o Snyk resolveu e testou a árvore de dependências de
    verdade, não "0 dependências" ou skip silencioso.
+
+---
+
+## 24. Fix de segurança — pin postgresql 42.7.12 resolvendo CVE alta pega pelo Snyk
+
+1. **Contexto** — Sequência do item 23: a flag `--maven-skip-wrapper`
+   corrigida destravou o step do Snyk pela primeira vez. O usuário pediu
+   leitura do log resultante (`/tmp/snyk-fail.log`) e classificação: o
+   mesmo erro de flag de novo, ou um erro *diferente* (CVE real ou outra
+   config)? Exigiu citar a linha raiz e classificar antes de propor
+   qualquer correção.
+
+2. **Prompt (resumo)** — Ler o log, classificar entre duas hipóteses
+   (1: flag ainda não pega, mesmo erro Maven SHA-256; 2: flag funcionou,
+   erro novo — se CVE, nomear dependência/vuln/versão corrigida) e citar
+   a linha raiz antes de propor fix. Depois de eu confirmar hipótese 2 e
+   propor o pin, usuário aprovou com 3 condições explícitas: (1) pin via
+   `dependencyManagement` com override de versão que vença o BOM do
+   Quarkus, verificado via `dependency:tree` mostrando 42.7.12 e não
+   42.7.11; (2) rodar `./mvnw verify` completo confirmando que o bump
+   não quebra os testes de integração com Testcontainers; (3) confirmar
+   Snyk local se possível, ou registrar que a próxima rodada de CI
+   verifica.
+
+3. **O que a IA produziu** —
+   - Classificou hipótese 2: log mostra "Tested 177 dependencies... found
+     1 issue" — o Snyk rodou de verdade. Achado:
+     `SNYK-JAVA-ORGPOSTGRESQL-17874248` ("Incorrect Implementation of
+     Authentication Algorithm"), High, em `org.postgresql:postgresql@42.7.11`,
+     introduzido via `quarkus-jdbc-postgresql@3.37.1`. Fix disponível:
+     `42.7.12`.
+   - Editou `quarkus-impl/pom.xml`: nova propriedade
+     `postgresql.version=42.7.12` e entrada `org.postgresql:postgresql`
+     em `dependencyManagement`, declarada depois do import do
+     `quarkus-bom` (ordem que garante precedência sobre a versão do BOM).
+   - Verificou com `mvn dependency:tree -Dincludes=org.postgresql:postgresql`
+     (JDK 25 via `JAVA_HOME`) — confirmou resolução em `42.7.12`, não
+     `42.7.11`.
+   - Rodou `./mvnw verify` completo: 162 testes, 0 falhas, BUILD SUCCESS,
+     incluindo os testes de persistência via Testcontainers/Postgres real.
+   - Tentou `snyk test` local para confirmar a condição 3 — falhou com
+     401 (SNYK-0005, sessão não autenticada). Reportado como não
+     verificável localmente, deixando a confirmação final para a
+     próxima rodada de CI em vez de assumir sucesso.
+
+4. **Resultado** — Aceito com as 3 condições cumpridas (2 verificadas
+   diretamente, 1 declarada como pendente de CI por falta de auth local
+   — não mascarada como sucesso). Ver `ai/revisoes.md`, item 19: análise
+   de por que essa CVE só apareceu depois que o gate do Snyk foi
+   destravado (itens 21/23), e por que um BOM confiável não é garantia
+   de dependência transitiva livre de CVE.

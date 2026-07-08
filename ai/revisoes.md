@@ -1075,3 +1075,66 @@ incompleta, e por quê — não é um changelog de features.
    ("varra todos os codepoints", "teste em dois motores") — pedir só
    "isso está certo?" produz uma confirmação tão limitada quanto o
    escopo da pergunta.
+
+---
+
+## 19. Gate de segurança provou seu valor — CVE real no driver postgresql pego só depois do fix do Snyk (item ligado ao 17/18)
+
+1. **Data / Fase** — 2026-07-08, fase de CI/CD (pipeline de segurança:
+   Snyk + Trivy + gitleaks), depois da correção da flag do Maven CLI
+   (`--maven-skip-wrapper`) que destravou o step do Snyk.
+
+2. **O que a IA sugeriu** — Nas rodadas anteriores (`ci: fix pipeline`),
+   o foco foi só destravar o step do Snyk em si — a flag certa para o
+   CLI Maven embarcado na imagem `snyk/snyk:maven` validar a distribuição
+   sem quebrar em "Failed to validate Maven distribution SHA-256". Nenhuma
+   suposição foi feita sobre o que o scan ia encontrar depois de rodar —
+   o objetivo daquelas rodadas era só "o Snyk consegue rodar", não "o
+   Snyk aprova".
+
+3. **Problema identificado** — Assim que o Snyk finalmente escaneou de
+   verdade (177 dependências), achou 1 vulnerabilidade real de severidade
+   alta: `SNYK-JAVA-ORGPOSTGRESQL-17874248` ("Incorrect Implementation of
+   Authentication Algorithm") em `org.postgresql:postgresql@42.7.11`,
+   puxado transitivamente por `io.quarkus:quarkus-jdbc-postgresql@3.37.1`,
+   que por sua vez vem do `quarkus-bom@3.37.1` — o BOM oficial da
+   plataforma, considerado "confiável" por definição. Isso mostra que
+   confiar num BOM gerenciado não é garantia de dependências livres de
+   CVE: o BOM fixa versões por compatibilidade testada, não por ausência
+   de vulnerabilidade conhecida, e um driver JDBC de banco (superfície
+   de autenticação) é exatamente o tipo de dependência transitiva que
+   ninguém audita manualmente. Sem o gate de Snyk rodando de fato — e
+   sem as duas rodadas anteriores insistindo em destravar a flag certa
+   em vez de aceitar o step vermelho — essa CVE teria ido para produção
+   silenciosamente, mascarada pelo verde do resto do pipeline.
+
+4. **Correção aplicada** — Override de versão em `dependencyManagement`
+   no `quarkus-impl/pom.xml`, declarado *depois* do import do
+   `quarkus-bom` (ordem importa: a entrada mais específica declarada
+   por último no mesmo `dependencyManagement` vence a do BOM importado),
+   fixando `org.postgresql:postgresql` em `42.7.12` via propriedade
+   `postgresql.version`, versão onde o Snyk reporta a issue como
+   corrigida. Verificação em duas camadas antes de aceitar como pronto:
+   `mvn dependency:tree -Dincludes=org.postgresql:postgresql` confirmando
+   que a versão efetivamente resolvida no grafo é `42.7.12` (não bastava
+   só declarar — BOMs e overrides têm regras de precedência que podem
+   silenciosamente não pegar), e `./mvnw verify` completo (162 testes,
+   incluindo os testes de integração via Testcontainers que sobem
+   Postgres de verdade) confirmando que o bump de patch não quebrou
+   nada em runtime. O Snyk local não pôde ser reexecutado para confirmar
+   (401 — sessão não autenticada), então a confirmação final fica
+   pendente da próxima rodada de CI, registrada como tal em vez de
+   assumida como certa.
+
+5. **Lição** — Um gate de segurança só entrega valor quando ele
+   efetivamente roda e efetivamente falha quando deveria: as duas
+   rodadas anteriores gastas destravando a flag do Maven CLI não foram
+   trabalho de infraestrutura desperdiçado, foram a pré-condição para
+   este achado real. Dirigir IA em pipeline de segurança exige separar
+   "o step passou" de "o step rodou de verdade" — um step verde por
+   erro de configuração (ex: SHA-256 do Maven falhando antes de sequer
+   escanear) é pior que um step vermelho, porque cria falsa sensação de
+   cobertura. E mesmo depois do fix, aceitar a correção proposta pela
+   IA exige verificação de efeito real (dependency:tree, não só o
+   diff do pom.xml) — declarar uma versão em XML não garante que o
+   resolvedor de dependências do Maven vai de fato usá-la.

@@ -23,6 +23,7 @@
         <swagger-request-validator.version>2.44.9</swagger-request-validator.version>
         <!-- Matches the Testcontainers version used by the Quarkus 3.37 platform (Dev Services) -->
         <testcontainers.version>2.0.5</testcontainers.version>
+        <postgresql.version>42.7.12</postgresql.version>
     </properties>
 
     <dependencyManagement>
@@ -40,6 +41,12 @@
                 <version>${quarkus.platform.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- Override quarkus-bom's 42.7.11: SNYK-JAVA-ORGPOSTGRESQL-17874248 (auth algorithm), fixed in 42.7.12 -->
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
