@@ -9,11 +9,13 @@ import java.util.Set;
 public final class BodyValidation {
 
     public static final String NAME_INVALID =
-            "não pode estar em branco e deve ter no máximo 100 caracteres";
+            "não pode estar em branco, não pode conter caracteres de controle"
+                    + " e deve ter no máximo 100 caracteres";
     public static final String TITLE_INVALID =
-            "não pode estar em branco e deve ter no máximo 200 caracteres";
+            "não pode estar em branco, não pode conter caracteres de controle"
+                    + " e deve ter no máximo 200 caracteres";
     public static final String DESCRIPTION_TOO_LONG =
-            "deve ter no máximo 2000 caracteres";
+            "não pode conter caracteres de controle e deve ter no máximo 2000 caracteres";
     public static final String PRIORITY_REQUIRED =
             "é obrigatório e deve ser um dos valores: low, medium, high";
     public static final String PRIORITY_INVALID =
@@ -54,11 +56,22 @@ public final class BodyValidation {
     }
 
     public static boolean invalidText(String value, int maxLength) {
-        return value == null || value.isBlank() || value.length() > maxLength;
+        return value == null || value.isBlank() || value.length() > maxLength || hasControlChar(value);
     }
 
-    public static boolean tooLong(String value, int maxLength) {
-        return value != null && value.length() > maxLength;
+    /** Optional free-text field: null is fine, but if present it must still be well-formed. */
+    public static boolean invalidDescription(String value, int maxLength) {
+        return value != null && (value.length() > maxLength || hasControlChar(value));
+    }
+
+    /**
+     * Rejects raw control characters, including the null byte (0x00): an
+     * unescaped one is invalid JSON syntax, but a JSON-escaped one still
+     * decodes into a real control character that Postgres refuses at insert
+     * time with a raw 500. Caught here so it surfaces as 400 invalid-request-body.
+     */
+    private static boolean hasControlChar(String value) {
+        return value != null && value.chars().anyMatch(Character::isISOControl);
     }
 
     public static InvalidRequestBodyException missingBody() {

@@ -55,7 +55,7 @@ public class UpdateProjectRequest {
         if (name.isPresent() && BodyValidation.invalidText(name.value(), 100)) {
             errors.add(new FieldError("name", BodyValidation.NAME_INVALID));
         }
-        if (description.isPresent() && BodyValidation.tooLong(description.value(), 2000)) {
+        if (description.isPresent() && BodyValidation.invalidDescription(description.value(), 2000)) {
             errors.add(new FieldError("description", BodyValidation.DESCRIPTION_TOO_LONG));
         }
         if (status.isPresent()) {

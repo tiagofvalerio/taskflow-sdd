@@ -19,9 +19,10 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
-import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
 
 import java.util.List;
 import java.util.UUID;
@@ -60,7 +61,13 @@ public class ProjectResource {
     }
 
     @GET
-    public List<ProjectResponse> list(@QueryParam("status") String status) {
+    public List<ProjectResponse> list(@Context UriInfo uriInfo) {
+        // @QueryParam binds a present-but-empty value ("?status=") to null,
+        // indistinguishable from an absent parameter (quarkus-rest quirk —
+        // https://github.com/quarkusio/quarkus/issues/44885). Reading the raw
+        // query map instead preserves the distinction the enum switch needs
+        // to fail-fast on "?status=" instead of silently returning everything.
+        String status = uriInfo.getQueryParameters().getFirst("status");
         return listProjects.execute(QueryParams.projectStatus(status)).stream()
                 .map(ProjectResponse::from)
                 .toList();

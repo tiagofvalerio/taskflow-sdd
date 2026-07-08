@@ -34,7 +34,7 @@ public class CreateProjectRequest {
         if (BodyValidation.invalidText(name, 100)) {
             errors.add(new FieldError("name", BodyValidation.NAME_INVALID));
         }
-        if (BodyValidation.tooLong(description, 2000)) {
+        if (BodyValidation.invalidDescription(description, 2000)) {
             errors.add(new FieldError("description", BodyValidation.DESCRIPTION_TOO_LONG));
         }
         for (String field : unknownFields.keySet()) {

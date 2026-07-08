@@ -513,10 +513,13 @@ components:
         Project id. Canonical RFC 4122 textual form (8-4-4-4-12 hex
         digits) — non-canonical strings some platform parsers tolerate
         (e.g. `1-1-1-1-1`) are rejected with `400`; see the path-id scope
-        decision in `info.description`.
+        decision in `info.description`. Hex digits are case-insensitive,
+        matching RFC 4122's input rule — only the grouping/length shape
+        is enforced.
       schema:
         type: string
         format: uuid
+        pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
     TaskIdParam:
       name: id
@@ -526,10 +529,13 @@ components:
         Task id. Canonical RFC 4122 textual form (8-4-4-4-12 hex digits)
         — non-canonical strings some platform parsers tolerate (e.g.
         `1-1-1-1-1`) are rejected with `400`; see the path-id scope
-        decision in `info.description`.
+        decision in `info.description`. Hex digits are case-insensitive,
+        matching RFC 4122's input rule — only the grouping/length shape
+        is enforced.
       schema:
         type: string
         format: uuid
+        pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
   responses:
     PathParamBadRequest:
@@ -754,6 +760,7 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         description:
           type: string
           nullable: true
@@ -774,6 +781,7 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+          pattern: '.*\S.*'
         description:
           type: string
           nullable: true
@@ -840,6 +848,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+          pattern: '.*\S.*'
         description:
           type: string
           nullable: true
@@ -867,6 +876,7 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+          pattern: '.*\S.*'
         description:
           type: string
           nullable: true

@@ -63,7 +63,7 @@ public class UpdateTaskRequest {
         if (title.isPresent() && BodyValidation.invalidText(title.value(), 200)) {
             errors.add(new FieldError("title", BodyValidation.TITLE_INVALID));
         }
-        if (description.isPresent() && BodyValidation.tooLong(description.value(), 2000)) {
+        if (description.isPresent() && BodyValidation.invalidDescription(description.value(), 2000)) {
             errors.add(new FieldError("description", BodyValidation.DESCRIPTION_TOO_LONG));
         }
         if (status.isPresent()) {

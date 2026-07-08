@@ -17,9 +17,10 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
-import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
 
 import java.util.List;
 import java.util.UUID;
@@ -52,13 +53,17 @@ public class ProjectTasksResource {
     }
 
     @GET
-    public List<TaskResponse> list(@PathParam("id") String projectId,
-                                   @QueryParam("status") String status,
-                                   @QueryParam("priority") String priority) {
+    public List<TaskResponse> list(@PathParam("id") String projectId, @Context UriInfo uriInfo) {
         // Spec fail-fast order within the 400 stage: path (filter, already
         // done) -> query, and within query: status before priority.
-        TaskStatus statusFilter = QueryParams.taskStatus(status);
-        TaskPriority priorityFilter = QueryParams.taskPriority(priority);
+        //
+        // @QueryParam binds a present-but-empty value ("?status=") to null,
+        // indistinguishable from an absent parameter (quarkus-rest quirk —
+        // https://github.com/quarkusio/quarkus/issues/44885). Reading the raw
+        // query map instead preserves the distinction the enum switches need
+        // to fail-fast on "?status=" instead of silently ignoring the filter.
+        TaskStatus statusFilter = QueryParams.taskStatus(uriInfo.getQueryParameters().getFirst("status"));
+        TaskPriority priorityFilter = QueryParams.taskPriority(uriInfo.getQueryParameters().getFirst("priority"));
         return listTasks.execute(new ProjectId(UUID.fromString(projectId)),
                         statusFilter, priorityFilter).stream()
                 .map(TaskResponse::from)

@@ -1,0 +1,9 @@
+extends:
+  - recommended
+
+rules:
+  # This API deliberately has no security scheme (see spec/openapi.yaml's
+  # info.description, "No authentication" scope decision) — the recommended
+  # ruleset's security-defined rule flags that as an error, but it's an
+  # intentional, documented choice, not a spec defect.
+  security-defined: off

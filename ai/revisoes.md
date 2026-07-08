@@ -939,3 +939,64 @@ incompleta, e por quê — não é um changelog de features.
    TODOS os artefatos (inclusive o tooling em `.claude/` que dirige a
    própria IA), porque plano morto que sobrevive em agente/skill vira
    instrução ativa nas sessões seguintes.
+
+## 17. Lacuna prosa-vs-schema no `openapi.yaml` congelado — pega pelo Schemathesis, não por 6 rodadas de revisão humana
+
+1. **Data / Fase** — 2026-07-08, primeira execução real do pipeline de CI
+   (job `contract`, Schemathesis contra `spec/openapi.yaml`), já com a
+   spec formalmente "congelada" (ver item 10).
+
+2. **O que a IA sugeriu** — Nada de errado a corrigir na primeira
+   passada: a IA (eu) escreveu `spec/openapi.yaml` com
+   `ProjectIdParam`/`TaskIdParam` como `type: string, format: uuid` (sem
+   `pattern`) e `name`/`title` como `minLength: 1, maxLength: N` (sem
+   restrição de whitespace) — e a prosa ao lado (`info.description`,
+   exemplos `ProjectNameInvalid`/`TaskTitleInvalid`) já prometia
+   exatamente as regras mais estritas que o JSON Schema formal não
+   codificava: UUID canônico case-insensitive só no shape 8-4-4-4-12, e
+   "não pode estar em branco" além do comprimento. A implementação
+   (`UuidPathParamFilter`, `BodyValidation.invalidText`) já fazia a coisa
+   certa desde o início.
+
+3. **Problema identificado** — Schemathesis gera dados a partir do JSON
+   Schema formal, não da prosa. `format: uuid` não é validado por
+   nenhuma engine de schema (é só anotação); `minLength: 1` sozinho
+   aceita uma string de um único espaço. Rodando contra a API real, a
+   ferramenta gerou UUIDs de path em forma não-canônica e nomes/títulos
+   só-espaço, viu a API rejeitar corretamente (400), e reportou isso
+   como "schema constraints don't match API validation" em 6 operações —
+   um sinal de que o *schema* estava sub-declarado, não de que a API
+   estava errada. Seis rodadas de revisão adversarial humana/IA sobre a
+   spec (itens 1–9, 14) nunca pegaram essa lacuna especificamente porque
+   revisão de prosa lê "canônico" e "não pode estar em branco" e
+   preenche mentalmente a implicação de schema — a ferramenta de fuzzing
+   não faz essa inferência, só lê o que está formalmente declarado.
+
+4. **Correção aplicada** — `pattern` adicionado em 6 pontos, todos
+   *aditivos* (nenhum `minLength`/`maxLength` removido ou enfraquecido):
+   `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+   em `ProjectIdParam`/`TaskIdParam` (case-insensitive — verifiquei antes
+   de aplicar que uma leitura lowercase-only contradiria a decisão já
+   fixada no item 3 deste documento e quebraria
+   `uppercaseHexUuidPassesPathValidation`; o humano confirmou
+   case-insensitive quando perguntado), e `.*\S.*` em
+   `CreateProjectRequest.name`, `UpdateProjectRequest.name`,
+   `CreateTaskRequest.title`, `UpdateTaskRequest.title`. Por ser emenda à
+   spec congelada, passou por `spec-reviewer` como confirmação dedicada
+   antes do commit (achou os dois regexes corretos, sem contradição nova
+   com prosa/exemplos existentes) e pela suíte de contrato completa
+   (162/162, sem quebra — validação client-side é desligada
+   deliberadamente nos testes Java, então o aperto do schema não afeta
+   os testes existentes, só ferramentas externas como o Schemathesis).
+   Ver `docs/decisoes.md` item 12 para o racional completo.
+
+5. **Lição** — Fuzzing baseado em schema mede a fidelidade do próprio
+   schema, não da implementação: ele expõe exatamente a categoria de
+   lacuna que revisão humana de prosa estrutura mal para achar (mesma
+   lição do item 1 sobre "o que nunca foi escrito") — porque a máquina
+   não preenche intenção a partir de texto, só valida o que está
+   formalmente declarado. Rodar a suíte de contrato contra a API viva,
+   cedo, teria achado isso antes da spec ser declarada congelada; rodá-la
+   depois ainda vale, mas transforma toda emenda subsequente em mudança
+   de artefato já "fechado" — daí o cuidado extra (spec-reviewer
+   dedicado) que esta emenda específica recebeu.

@@ -997,3 +997,59 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    escolhido entre opções). Análise de processo em `ai/revisoes.md`,
    entrada 16 — inclusive o ponto de que a IA nunca questionou a
    viabilidade do dual-stack em nenhuma sessão anterior.
+
+## 20. Fechamento prosa→schema — patterns de UUID canônico e não-branco em name/title
+
+1. **Contexto** — Primeira execução real do pipeline de CI. Job
+   `contract` (Schemathesis contra `spec/openapi.yaml`, já formalmente
+   congelada) reportou "schema constraints don't match API validation"
+   em 6 operações. Triagem separada identificou duas causas-raiz
+   distintas (3 operações cada): `id` de path sem `pattern` de UUID
+   canônico, e `name`/`title` sem restrição de whitespace além de
+   `minLength`. Investigação anterior já havia mostrado que, nos dois
+   casos, a implementação estava certa e a spec já prometia a regra
+   certa em prosa/exemplo — só não em JSON Schema formal. Esta sessão
+   aplicou a correção.
+
+2. **Prompt (resumo)** — Aprovado tightening da spec com condições
+   específicas: (1) grupo A — `pattern` de UUID canônico em
+   `ProjectIdParam`/`TaskIdParam`, com instrução explícita de verificar
+   se `UuidPathParamFilter` concorda quanto a maiúsculas/minúsculas e
+   reconciliar caso divirja; (2) grupo B — `pattern` de "contém
+   não-whitespace" em `name`/`title`, ADICIONADO (não substituindo)
+   `minLength`/`maxLength` existentes; (3) por ser emenda à spec
+   congelada: rodar `spec-reviewer` como confirmação dedicada nas
+   adições, revalidar suíte de contrato completa, atualizar
+   `decisoes.md` registrando o fechamento prosa→schema — e mostrar o
+   resultado do `spec-reviewer` antes de qualquer commit.
+
+3. **O que a IA produziu** —
+   - Verificação do grupo A antes de aplicar: a instrução do usuário
+     pedia pattern "lowercase canonical", mas a prosa de
+     `info.description` e `docs/decisoes.md` (item 3) já fixavam
+     case-insensitive como decisão deliberada (rejeitando lowercase-only
+     como autocontraditória), com teste (`uppercaseHexUuidPassesPathValidation`)
+     pinando o comportamento. Contradição sinalizada explicitamente ao
+     usuário via pergunta estruturada em vez de aplicar o literal ou
+     substituir silenciosamente — usuário confirmou case-insensitive.
+   - `pattern: '^[0-9a-fA-F]{8}-...-[0-9a-fA-F]{12}$'` em
+     `ProjectIdParam`/`TaskIdParam`; `pattern: '.*\S.*'` somado a
+     `minLength`/`maxLength` em `CreateProjectRequest.name`,
+     `UpdateProjectRequest.name`, `CreateTaskRequest.title`,
+     `UpdateTaskRequest.title` — 6 pontos, todos aditivos.
+   - `spec-reviewer` disparado como confirmação dedicada (não revisão
+     geral) nas 2 mudanças: regex do UUID e composição do pattern de
+     name/title contra `minLength`/`maxLength` existentes e exemplos já
+     presentes na spec.
+   - Suíte de teste completa revalidada (162/162 — validação
+     client-side já era desligada deliberadamente nos testes Java, então
+     o aperto do schema não quebrou nada existente).
+   - `docs/decisoes.md` item 12 escrito com o racional completo,
+     incluindo a nota do cuidado com a leitura lowercase-only rejeitada.
+
+4. **Resultado** — Aceito. `spec-reviewer` não achou problema em nenhuma
+   das duas mudanças (regex corretos, sem contradição nova com
+   prosa/exemplos). Análise de processo completa em `ai/revisoes.md`,
+   entrada 17 — inclusive o ponto de que fuzzing baseado em schema acha
+   uma categoria de lacuna (fidelidade schema formal) que revisão
+   humana de prosa não acha.

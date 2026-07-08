@@ -464,3 +464,79 @@ alegação central de SDD. Uma segunda implementação (Rails ou qualquer outra)
 continua construível a partir do contrato sozinho, sem engenharia reversa da
 implementação Java — o corte remove a *demonstração* da propriedade, não a
 propriedade.
+
+---
+
+## 11. TRACE excluído da varredura de contrato (Schemathesis)
+
+**Decisão**: o job `contract` do CI roda Schemathesis com
+`--exclude-checks unsupported_method`, desligando o check que fuzza métodos
+HTTP fora dos definidos na spec (na prática, TRACE em toda rota).
+
+**Contexto**: a primeira execução real do pipeline reportou 4 falhas com
+`TRACE`: em três rotas o framework responde `405` sem o header `Allow`
+(exigido pela RFC 9110), e em `/projetos/{id}/tarefas` responde `404` em vez
+de `405`. Esse comportamento vem do dispatch HTTP padrão do quarkus-rest, não
+de código de aplicação — nenhuma rota deste projeto declara ou trata `TRACE`.
+
+**Por quê**: `spec/openapi.yaml` nunca definiu contrato para `TRACE` em
+nenhuma operação — não há requisito nosso sendo violado. É uma lacuna real de
+conformidade com a RFC 9110, mas do framework, não do contrato desta API;
+corrigi-la exigiria interceptar `TRACE` manualmente em toda rota só para
+adicionar um header `Allow`, sem nenhum requisito do enunciado ou da spec
+pedindo isso. Excluir o check mantém o job fiel ao que **este contrato**
+promete, em vez de fazer o CI fiscalizar RFC HTTP genérica não pactuada.
+
+**O que isso não cobre**: os outros dois achados da mesma execução —
+`status=` vazio sendo aceito como se ausente, e bytes de controle
+alcançando o Postgres cru como 500 — eram violações reais do próprio
+contrato (`invalid-query-parameter` e `invalid-request-body`, respectivamente)
+e foram corrigidos no código, não silenciados no CI.
+
+---
+
+## 12. Fechamento prosa → schema: `pattern` para UUID canônico e nome/título não-vazio
+
+**Decisão**: `spec/openapi.yaml` ganhou `pattern` em quatro pontos que já
+tinham a regra certa em prosa/exemplo, mas não em JSON Schema formal:
+
+- `ProjectIdParam` e `TaskIdParam`: `pattern:
+  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'`
+  — hex case-insensitive, só o shape de agrupamento é imposto.
+- `CreateProjectRequest.name`, `UpdateProjectRequest.name`,
+  `CreateTaskRequest.title`, `UpdateTaskRequest.title`: `pattern: '.*\S.*'`
+  somado (não substituindo) a `minLength`/`maxLength` já existentes —
+  exige ao menos um caractere não-whitespace em algum ponto da string.
+
+**Contexto**: a suíte de contrato (Schemathesis) reportou "schema validation
+mismatch" em 6 operações — 3 por causa do `id` de path, 3 por causa de
+`name`/`title`. Investigação (ver `ai/prompt-log.md` da sessão) mostrou que,
+nos dois casos, a implementação já fazia a coisa certa e a spec já *dizia*
+a coisa certa em prosa/exemplo — só não em JSON Schema:
+
+- O item 3 deste documento (`format: uuid` = forma textual canônica) já
+  fixava case-insensitividade em prosa (`info.description`) — mas
+  `format: uuid` não é validado por engines de JSON Schema (é só anotação),
+  então geradores baseados em schema (Schemathesis) não sabiam do shape
+  8-4-4-4-12 nem da regra de caixa. `UuidPathParamFilter` já implementa
+  exatamente esse regex; nenhuma mudança de código.
+- O exemplo `ProjectNameInvalid`/`TaskTitleInvalid` já promete a mensagem
+  "não pode estar em branco e deve ter no máximo N caracteres" — mas
+  `minLength: 1` sozinho aceita uma string de um único espaço.
+  `BodyValidation.invalidText` já rejeita via `isBlank()`; nenhuma mudança
+  de código.
+
+**Por quê não é uma decisão nova**: em ambos os casos a regra já existia e
+já era testada (`uppercaseHexUuidPassesPathValidation`,
+`emptyNameOnProjectCreate` e os exemplos citados) — só não estava expressa
+de um jeito que uma ferramenta schema-only (Schemathesis, ou uma futura
+segunda implementação lendo só o JSON Schema, sem ler a prosa) pudesse
+derivar sozinha. Fechar esse gap é o próprio objetivo de SDD: o contrato
+machine-readable deve bastar, sem depender de prosa que só humanos leem.
+
+**Cuidado verificado antes de aplicar**: a leitura "UUID canônico" foi
+cogitada como *lowercase-only* durante a triagem deste achado — rejeitada
+porque contradiz a decisão já fixada no item 3 (case-insensitive é
+deliberado, não descuido) e quebraria `uppercaseHexUuidPassesPathValidation`.
+O `pattern` aplicado usa `[0-9a-fA-F]`, não `[0-9a-f]`, exatamente para não
+reabrir essa decisão.

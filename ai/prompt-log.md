@@ -1687,3 +1687,116 @@ show me the job-dependency graph. Then write the file.
 **2026-07-07 23:21**
 
 continue
+
+---
+**2026-07-08 01:23**
+
+Read /tmp/ci-fail.log — failed-step logs from the pipeline's first real run on
+main. Five jobs failed for independent reasons; the test job passed. Triage each
+failing job (security, spec-lint, contract, spec-drift, sonar) separately:
+
+1. security: the annotation already shows the cause — aquasecurity/trivy-action
+   @0.36.0 doesn't exist. Find the current valid version and fix the tag. This
+   killed the whole job (Snyk + gitleaks included) at setup, so it unblocks all
+   three.
+2. spec-lint, contract, spec-drift, sonar: for EACH, quote the root-cause error
+   line from the log and classify it as (a) config/wiring bug in the workflow,
+   or (b) a genuine finding about my spec or implementation. Do NOT fix yet —
+   show me the classification and proposed fix per job first. I decide each,
+   because contract/spec-drift findings might be real conformance issues worth
+   documenting, not just silencing.
+
+---
+**2026-07-08 01:37**
+
+Apply these decisions:
+1. spec-lint: add .redocly.yaml disabling ONLY security-defined, comment
+   referencing the documented no-auth scope decision; keep rest of recommended.
+2. contract bug A: reject empty/invalid query enum values (status=) as 400
+   invalid-query-parameter per spec; add a contract test.
+3. contract bug B: reject control characters / null bytes in name and
+   description at validation -> 400 invalid-request-body (currently reaches
+   Postgres as a raw 500); add a contract test. This is a real robustness +
+   contract fix.
+4. contract: exclude TRACE from the Schemathesis run (documented framework
+   default, not in our contract); note in decisoes.md.
+5. Before finalizing contract: investigate the "schema validation mismatch on
+   6 ops" warning — show me which ops and whether our validation being stricter
+   than the spec is correct (good) or the spec under-declares a constraint
+   (fix). Wait for my call on that one.
+6. spec-drift: remove the job entirely (rationale recorded separately). Ensure
+   nothing else depends on it in the needs: graph.
+Show me the 6-op investigation before committing.
+
+---
+**2026-07-08 18:21**
+
+Approved: tighten the spec to match documented intent — this completes existing
+decisions, doesn't create new ones. Conditions:
+
+Group A: add pattern to ProjectIdParam and TaskIdParam:
+^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ (lowercase
+canonical, matching the O4 decision already in the spec prose and the
+UUID-casing note). Verify the implementation's UuidPathParamFilter agrees on
+casing — if it accepts uppercase, reconcile so spec and code match exactly.
+
+Group B: ADD a "contains non-whitespace" pattern to name/title schemas
+alongside the existing minLength/maxLength (do not replace the length bounds).
+Verify the composite still enforces max length.
+
+Then, because this amends the frozen spec:
+1. Run the spec-reviewer agent as a confirmation pass on just these additions
+   (regex correctness, consistency with existing prose/examples, no new
+   contradictions).
+2. Re-run the full contract suite — confirm all 162 still pass, or fix any test
+   that was asserting the now-tightened-away looser behavior.
+3. Update decisoes.md: note the prose→schema fidelity closure (formalizing O4's
+   UUID pattern and the non-blank rule that examples already promised).
+Show me the spec-reviewer result before committing.
+
+---
+**2026-07-08 18:27**
+
+<task-notification>
+<task-id>a101a549c02009905</task-id>
+<tool-use-id>toolu_014k39VbXBJQAFuVjb2R4Z5B</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-tiagofvalerio-Development-taskflow-sdd/6d66ccc0-a0ff-49ea-8cde-bf3dfa2c360f/tasks/a101a549c02009905.output</output-file>
+<status>completed</status>
+<summary>Agent "Spec-reviewer pass on UUID/name pattern additions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both wired into responses (create + update for each resource, presumably). Everything checks out.
+
+## Findings
+
+**Change 1 — UUID path parameter `pattern` (lines 508–538)**
+
+1. **CONFIRMED-correct.** The regex `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$` is properly anchored (`^`/`$`), each hyphen-delimited group has the exact canonical 8-4-4-4-12 length, and the character class `[0-9a-fA-F]` correctly makes hex digits case-insensitive without permitting any non-hex character. No off-by-one in group lengths, no missing hyphen, no stray `\A`/`\z` vs `^`/`$` line-anchor pitfall (irrelevant here since UUIDs contain no newlines).
+   - It is identical for `ProjectIdParam` (line 522) and `TaskIdParam` (line 538) — no drift between the two copies.
+   - It matches the prose in `info.description` (lines 108–117: "canonical... 8-4-4-4-12... case-insensitively... only the grouping/length shape is enforced") exactly — no new constraint introduced beyond what the prose already promised (e.g., it does not require lowercase, does not forbid braces-removal-only forms beyond canonical, does not add version/variant nibble constraints per RFC 4122 §4.1.1/4.1.3, which the prose explicitly does *not* claim to enforce — "only the grouping/length shape").
+   - Cross-checked against `NonCanonicalUuidPathParameter` example (line 1094) and `PathParamBadRequest`/`TaskFiltersBadRequest` responses (lines 540–556, 667–684) — all consistently describe `1-1-1-1-1`-style non-canonical strings as rejected; nothing here contradicts the new pattern.
+   - No regression risk found in the two `ProjectIdParam`/`TaskIdParam` schemas.
+
+**Change 2 — `pattern: '.*\S.*'` on name/title fields (lines 763, 784, 851, 879)**
+
+2. **CONFIRMED-correct.** Verified all four locations: `CreateProjectRequest.name` (763), `UpdateProjectRequest.name` (784), `CreateTaskRequest.title` (851), `UpdateTaskRequest.title` (879) — exactly the four fields specified, no stray fifth location, and the `Task`/`Project` response schemas' `title`/`name` (readOnly-adjacent response fields, lines 730–732, 804–807) were correctly left untouched (pattern only added to request schemas, as intended).
+   - `minLength`/`maxLength` were preserved unchanged at each location (100 for project name, 200 for task title) — the addition is additive, not a replacement, confirmed by diffing the three properties (`minLength: 1`, `maxLength: N`, `pattern: '.*\S.*'`) sitting together at all four sites.
+   - Regex correctness: JSON Schema's `pattern` keyword uses ECMA‑262 `test()`-style matching (unanchored substring search, not full-string match), so `.*\S.*` is satisfied as soon as the engine finds any single non-whitespace character `\S`, with both `.*` groups matching zero-width at that position. This holds even if the string contains a literal newline (since `.` without the `s`/dotAll flag doesn't cross line terminators by default) — the zero-width match of `.*` doesn't require crossing the newline, so the "contains at least one non-whitespace character anywhere" semantics hold correctly regardless of embedded newlines. No under/over-matching bug.
+   - Composability: combined with `minLength: 1..maxLength: N`, the three constraints together correctly express "length 1..N AND at least one non-whitespace character" as intended (logical AND is the correct default composition of sibling JSON Schema keywords) — matches the target composite semantics exactly.
+   - No conflicting "valid" example elsewhere: searched all `components/examples` and inline `name:`/`title:` occurrences in the spec — there is no worked example anywhere showing a whitespace-only or edge-length name/title being treated as a *valid* create/update payload that this pattern would newly break. `ProjectNameInvalid` (line 998) and `TaskTitleInvalid` (line 1020) are both wired into the relevant `400` responses (lines 573, 597, 621, 647) for both create and update operations, and their message text ("não pode estar em branco e deve ter no máximo N caracteres") is now fully backed by the schema (previously only the length half was schema-enforced; the "não pode estar em branco" half was prose-only).
+   - No new contradiction introduced with nearby `description` field constraints (which were correctly left untouched, since the blank-body examples only reference `name`/`title`, not `description`).
+
+No issues found in either change. Both are precise, minimal, additive formalizations of pre-existing prose/example commitments, with no character-class, anchoring, or composition bugs, and no newly-broken "valid" examples elsewhere in the spec.
+
+Files reviewed: `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml` (lines 95–140, 495–570, 655–900, 940–1140).</result>
+<usage><subagent_tokens>22043</subagent_tokens><tool_uses>12</tool_uses><duration_ms>77678</duration_ms></usage>
+</task-notification>
+
+---
+**2026-07-08 18:28**
+
+/revisar Schemathesis expôs uma lacuna de fidelidade prosa-vs-schema que 6 rodadas de revisão humana não pegaram: a spec prometia em prosa (UUID canônico, "não pode estar em branco") o que o JSON Schema formal não codificava — format: uuid não é enforçado por validadores, minLength: 1 aceita espaços. Nossa implementação estava correta; a spec é que estava sub-declarada. Correção: patterns regex formalizando o que prosa/exemplos já prometiam (completando a decisão O4, não criando nova). Lição: fuzzing baseado em schema mede a fidelidade do próprio schema — revisão humana lê a prosa e preenche a intenção mentalmente; a máquina não.
+
+---
+**2026-07-08 18:30**
+
+/log-ai fechamento da lacuna prosa-vs-schema exposta pelo Schemathesis — patterns regex de UUID canônico (case-insensitive, conforme decisão documentada) e não-branco em name/title, com passe de confirmação do spec-reviewer e 162 testes revalidados

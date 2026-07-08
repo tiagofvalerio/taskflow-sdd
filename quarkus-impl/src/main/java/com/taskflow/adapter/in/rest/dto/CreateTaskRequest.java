@@ -32,7 +32,7 @@ public class CreateTaskRequest {
         if (BodyValidation.invalidText(title, 200)) {
             errors.add(new FieldError("title", BodyValidation.TITLE_INVALID));
         }
-        if (BodyValidation.tooLong(description, 2000)) {
+        if (BodyValidation.invalidDescription(description, 2000)) {
             errors.add(new FieldError("description", BodyValidation.DESCRIPTION_TOO_LONG));
         }
         switch (priority == null ? "" : priority) {

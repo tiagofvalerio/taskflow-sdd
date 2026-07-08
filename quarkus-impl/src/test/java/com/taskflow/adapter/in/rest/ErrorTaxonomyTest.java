@@ -379,6 +379,33 @@ class ErrorTaxonomyTest extends SpecValidatedRestTest {
         }
 
         @Test
+        void emptyProjectStatusFilterRejected() {
+            // "?status=" binds to null via @QueryParam (quarkus-rest quirk,
+            // https://github.com/quarkusio/quarkus/issues/44885) — resource
+            // reads the raw query map instead so this still fails the enum
+            // check rather than being silently treated as "no filter".
+            given().queryParam("status", "").get("/projetos")
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-query-parameter"))
+                    .body("detail", equalTo(
+                            "O parâmetro status deve ser um dos valores: active, archived."));
+        }
+
+        @Test
+        void emptyTaskStatusFilterRejected() {
+            String projectId = createProject("p");
+            given().queryParam("status", "").get("/projetos/{id}/tarefas", projectId)
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-query-parameter"))
+                    .body("detail", equalTo(
+                            "O parâmetro status deve ser um dos valores: pending, in_progress, done."));
+        }
+
+        @Test
         void bothFiltersInvalidReportsOnlyStatus() {
             String projectId = createProject("p");
             given().queryParam("status", "xxx").queryParam("priority", "yyy")
@@ -421,6 +448,22 @@ class ErrorTaxonomyTest extends SpecValidatedRestTest {
                     .body("type", equalTo(ERR + "invalid-request-body"))
                     .body("errors", hasSize(2))
                     .body("errors.field", hasItems("title", "priority"));
+        }
+
+        @Test
+        void nullByteInNameRejected() {
+            // A JSON \u0000 escape decodes into a real control
+            // character that must be rejected here, before it reaches
+            // Postgres (which rejects raw NUL bytes with an unhandled 500
+            // -- see BodyValidation.hasControlChar).
+            given().contentType(ContentType.JSON)
+                    .body("{\"name\": \"a\\u0000b\"}")
+                    .post("/projetos")
+                    .then()
+                    .statusCode(400)
+                    .contentType(PROBLEM_JSON)
+                    .body("type", equalTo(ERR + "invalid-request-body"))
+                    .body("errors[0].field", equalTo("name"));
         }
 
         @Test
