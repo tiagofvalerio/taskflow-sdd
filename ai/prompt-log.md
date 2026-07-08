@@ -1630,3 +1630,27 @@ continue
 **2026-07-07 22:36**
 
 /log-ai atualização de escopo — projeto single-stack (Quarkus)
+
+---
+**2026-07-07 23:06**
+
+Review src/main/docker/Dockerfile.jvm (the Quarkus-generated one I'm keeping).
+Confirm it's current for our build, and add a short "Executando via Docker"
+section to README.md (pt-BR): the build command, the run command with the
+DATABASE_URL/datasource env vars the app expects, and a one-line note that this
+is for local containerized runs (no hosted deployment — evaluators run locally,
+per the scope decision in decisoes.md). Do not add docker-compose or any
+orchestration. Flag whether the app needs an external Postgres to run and how
+to point it at one.
+
+---
+**2026-07-07 23:06**
+
+Review src/main/docker/Dockerfile.jvm (the Quarkus-generated one I'm keeping).
+Confirm it's current for our build, and add a short "Executando via Docker"
+section to README.md (pt-BR): the build command, the run command with the
+DATABASE_URL/datasource env vars the app expects, and a one-line note that this
+is for local containerized runs (no hosted deployment — evaluators run locally,
+per the scope decision in decisoes.md). Do not add docker-compose or any
+orchestration. Flag whether the app needs an external Postgres to run and how
+to point it at one.

@@ -53,6 +53,34 @@ You can then execute your native executable with: `./target/quarkus-impl-1.0.0-S
 
 If you want to learn more about building native executables, please consult <https://quarkus.io/guides/maven-tooling>.
 
+## Executando via Docker
+
+Build (gera o jar antes; a imagem não builda a partir do source):
+
+```shell script
+./mvnw package
+docker build -f src/main/docker/Dockerfile.jvm -t taskflow-quarkus .
+```
+
+Run — a aplicação não sobe banco embutido em modo container (Dev Services só
+vale para `dev`/`test`); é preciso um PostgreSQL externo acessível e apontado
+via env vars `QUARKUS_DATASOURCE_*`:
+
+```shell script
+docker run -i --rm -p 8080:8080 \
+  -e QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://host.docker.internal:5432/taskflow \
+  -e QUARKUS_DATASOURCE_USERNAME=taskflow \
+  -e QUARKUS_DATASOURCE_PASSWORD=taskflow \
+  taskflow-quarkus
+```
+
+O Postgres pode ser qualquer instância alcançável (instalação local, ou
+`docker run -p 5432:5432 postgres:16`); as migrations Flyway rodam
+automaticamente na subida contra o banco apontado.
+
+Isso cobre apenas execução local em container — sem deploy hospedado; a
+avaliação é local, conforme decisão de escopo em `docs/decisoes.md` (item 10).
+
 ## Related Guides
 
 - Hibernate ORM with Panache ([guide](https://quarkus.io/guides/hibernate-orm-panache)): Simplified JPA/Hibernate data access layer with active record and repository patterns
