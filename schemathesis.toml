@@ -1,0 +1,13 @@
+# Config for the `contract` CI job (Schemathesis vs spec/openapi.yaml).
+#
+# positive_data_acceptance's default expected-statuses is
+# ["2xx", "401", "403", "404", "409", "5xx"] (schemathesis/config/_checks.py) —
+# it does NOT read the spec's documented responses, it's a fixed list the
+# check compares against regardless of what the operation actually declares.
+# Setting expected-statuses REPLACES that list, it does not extend it, so the
+# full default set is repeated here with 422 added — every business-rule
+# violation in this API returns 422 with an RFC 7807 type URI (see CLAUDE.md);
+# that's schema-valid input correctly rejected for state reasons, not a bug.
+# See docs/decisoes.md for the full rationale.
+[checks]
+positive_data_acceptance.expected-statuses = ["2xx", "401", "403", "404", "409", "422", "5xx"]

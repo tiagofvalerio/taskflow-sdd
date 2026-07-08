@@ -1918,3 +1918,119 @@ File reviewed: `/Users/tiagofvalerio/Development/taskflow-sdd/spec/openapi.yaml`
 **2026-07-08 19:00**
 
 /log-ai correção de pipeline round 2 — pattern control-char no schema, --force-maven-cli no Snyk
+
+---
+**2026-07-08 19:07**
+
+Read /tmp/ci-fail3.log. Sonar now passes; contract and security still fail —
+both had fixes applied last round, so tell me for EACH whether the fix worked
+and revealed a new issue, or didn't take. Quote the exact root-cause line per
+job:
+
+1. contract (Schemathesis): last round I added the control-char pattern
+   ^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*$ to name/title. Did those 4 cases pass now,
+   and is this a NEW finding, or did the pattern not match what the code
+   rejects (regex vs BodyValidation.hasControlChar mismatch)?
+2. security (Snyk): I added --force-maven-cli. Did Snyk get PAST the Maven
+   distribution error and actually scan this time? If yes and it now fails,
+   it's a real CVE — show the vulnerability, affected dependency, and whether a
+   fixed version exists. If it's still the same distribution error, the flag
+   didn't take.
+Wait for my call on each.
+
+---
+**2026-07-08 19:10**
+
+Approved: add a control-char-only pattern to the description schema at all
+locations, WITHOUT the non-blank lookahead (description is optional/nullable —
+blank is legal, control chars are not). Pattern: ^[^\x00-\x1F\x7F-\x9F]*$
+(same character class as name/title, matching BodyValidation.invalidDescription
+/ hasControlChar exactly). Verify the class matches the Java predicate. This
+amends the frozen spec -> spec-reviewer confirmation pass, then re-run the full
+suite; the 3 description cases must pass and nothing else break. Update
+decisoes.md item 12: control-char formalization now complete across name,
+title, AND description — closing the pending addendum.
+
+---
+**2026-07-08 19:18**
+
+Add a description value to one existing request example (e.g. a project-create
+example) so the optional field has worked-example backing. Keep it minimal, no
+new example block — just populate description in one that already exists.
+
+---
+**2026-07-08 19:20**
+
+The stateful 422 (task-create against a project the fuzzer itself archived) is a
+correct API response the schema-blind fuzzer misreads. This is not a spec or
+code gap — rule 4 fired exactly as specified (ErrorTaxonomyTest.rule4 covers it).
+Fix at the Schemathesis level so it stops flagging documented business-rule 422s
+as unexpected. Evaluate the cleanest option and recommend one:
+(a) configure the run so 422 responses matching the spec's documented rule type
+    URIs are treated as expected, not failures;
+(b) exclude the specific stateful check that generates archive-then-create
+    sequences, if it can be scoped narrowly;
+(c) a hook/config that whitelists the documented 422 for that operation.
+Do NOT loosen the spec to claim task-create returns 2xx — that would be false.
+Wait for my call, and note this is a known limitation of schema-based fuzzing
+against stateful business rules — worth one line in decisoes.md.
+
+---
+**2026-07-08 19:24**
+
+Approved: option (a), global. Conditions:
+1. Write the FULL explicit status list, do not assume merge semantics — verify
+   whether expected-statuses replaces or extends the default, and if unclear,
+   write the complete set (200, 201, 401, 403, 404, 409, 422, "5xx") so no
+   existing default is silently dropped.
+2. After applying, re-run Schemathesis locally against the failing CI seed AND
+   a couple of other seeds if possible — confirm the stateful 422 false
+   positive is gone AND that positive_data_acceptance still fails on a genuinely
+   wrong status (sanity check the check still works — e.g. temporarily make an
+   endpoint return 418 and confirm Schemathesis catches it, then revert).
+3. decisoes.md: one line on the limitation — schema-based fuzzing cannot model
+   stateful business invariants; documented business-rule 422s are configured
+   as accepted outcomes because the deterministic contract suite
+   (ErrorTaxonomyTest) is what enforces each rule's correctness.
+
+---
+**2026-07-08 19:29**
+
+/log-ai fechamento do contract — positive_data_acceptance do Schemathesis configurado globalmente para aceitar 422 documentado (limitação estrutural de fuzzing schema-blind vs invariantes com estado)
+
+---
+**2026-07-08 19:30**
+
+Investigate before proposing a fix — confirm which of these it is:
+1. Word-splitting: is snyk/actions/maven passing the args string as a single
+   token so --force-maven-cli never registers? Check the action's documented
+   input format — does it want args space-separated in one string, or is there
+   a different input for CLI flags?
+2. Flag recognition: does the Snyk CLI version bundled in this container
+   actually support --force-maven-cli? Check when the flag was added vs the
+   pinned image version.
+3. Alternative approach entirely: since the failure is the Snyk container
+   running OUR ./mvnw wrapper and tripping its checksum guard — can we sidestep
+   the container's Maven auto-detection differently? Options to evaluate:
+   (a) run snyk test via a step that uses the runner's own Maven (setup-java
+   already ran) instead of the snyk/actions/maven Docker action, (b) point Snyk
+   at a pre-generated dependency tree, (c) pin a container image version whose
+   bundled CLI supports the flag.
+Report what you find with evidence (docs/version numbers), recommend ONE
+approach, and wait for my call. Don't try random arg variations.
+
+---
+**2026-07-08 19:45**
+
+Approved: --force-maven-cli -> --maven-skip-wrapper. Condition: after the fix,
+confirm from the CI log that Snyk now gets PAST the Maven distribution error and
+actually runs a dependency scan — the job going green must mean "scanned, no
+high/critical found", NOT "scanned zero dependencies" or "skipped". Quote the
+log line showing it resolved and tested the dependency tree. If it now finds a
+real high/critical CVE, that's a separate real finding to triage, not a
+regression — flag it and wait for my call.
+
+---
+**2026-07-08 19:46**
+
+/log-ai fix do Snyk — flag correta --maven-skip-wrapper (a anterior era fabricada), com verificação de que o scan realmente executa

@@ -106,7 +106,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --severity-threshold=high --file=quarkus-impl/pom.xml --force-maven-cli
+          args: --severity-threshold=high --file=quarkus-impl/pom.xml --maven-skip-wrapper
 
       - uses: actions/setup-java@v5
         with:

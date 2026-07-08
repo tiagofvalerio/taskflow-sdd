@@ -3,5 +3,5 @@
   "schemathesis_version": "4.22.3",
   "schema_location": "spec/openapi.yaml",
   "base_url": "http://localhost:8099",
-  "created_at": "2026-07-08T21:55:44.657177+00:00"
+  "created_at": "2026-07-08T22:27:33.795263+00:00"
 }

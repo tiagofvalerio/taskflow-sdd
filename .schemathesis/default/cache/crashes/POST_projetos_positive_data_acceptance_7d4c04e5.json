@@ -1,0 +1,78 @@
+{
+  "operation": "POST /projetos",
+  "method": "POST",
+  "path_template": "/projetos",
+  "fingerprint": "7d4c04e5",
+  "case_id": "4zIaGT",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"name\": \"TaskFlow\", \"description\": \"Ferramenta de gest\\u00e3o de projetos e tarefas\"}' http://localhost:8099/projetos",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://localhost:8099/projetos",
+      "url_template": "http://localhost:8099/projetos",
+      "headers": {
+        "User-Agent": "schemathesis/4.22.3",
+        "Accept-Encoding": "gzip, deflate, zstd",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "4zIaGT",
+        "Content-Type": "application/json",
+        "Content-Length": "86"
+      },
+      "response": {
+        "status_code": 418,
+        "headers": {
+          "content-type": "application/json;charset=UTF-8",
+          "content-length": "183",
+          "location": "/projetos/72151cfe-47c0-4b71-84fa-336c59ca908c"
+        },
+        "body": "{\"createdAt\":\"2026-07-08T22:27:34.651949Z\",\"description\":\"Ferramenta de gest\u00e3o de projetos e tarefas\",\"id\":\"72151cfe-47c0-4b71-84fa-336c59ca908c\",\"name\":\"TaskFlow\",\"status\":\"active\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "positive_data_acceptance",
+          "status": "failure",
+          "message": "API rejected schema-compliant request\n\nValid data should have been accepted\nExpected: 2xx, 401, 403, 404, 409, 422, 5xx"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.00010424999345559627,
+          "mode": "positive"
+        },
+        "components": {},
+        "phase": {
+          "name": "examples",
+          "data": {
+            "type": "ExamplesPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/projetos",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "name": "TaskFlow",
+          "description": "Ferramenta de gest\u00e3o de projetos e tarefas"
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

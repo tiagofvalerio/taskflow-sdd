@@ -569,11 +569,77 @@ escaparia da exclusão por essa brecha do `$`. Achado e confirmado
 empiricamente (`"A\n"` casava com `$` e não devia) antes de trocar para o
 lookahead, que não tem essa exceção em nenhum dos dois motores.
 
-**O que este addendum NÃO fecha**: a mesma execução de verificação local
-(Schemathesis com a seed do achado original) mostrou o mesmo padrão agora
-migrado para `description` — que tem `maxLength: 2000` no schema mas
-nenhum `pattern`, embora `BodyValidation.invalidDescription` já chame o
-mesmo `hasControlChar`. `description` é nullable/opcional (branco é válido
-ali, diferente de `name`/`title`), então o pattern não pode ser
-`.*\S.*`-based — precisa só da parte de exclusão de controle. Ainda não
-aplicado; registrado aqui para não se perder antes da próxima rodada.
+**Addendum 2 — `description` fechado, regra de caractere de controle agora
+completa em `name`, `title` E `description`**: a rodada anterior (acima)
+deixou `description` de fora de propósito — tem `maxLength: 2000` e
+`nullable: true` no schema mas nenhum `pattern`, embora
+`BodyValidation.invalidDescription` já chame o mesmo `hasControlChar` que
+`name`/`title` chamam via `invalidText`. Diferente de `name`/`title`,
+`description` é opcional (branco/vazio é válido ali), então o pattern
+**não** leva o lookahead `(?=.*\S)` — só a parte de exclusão de controle,
+nos 4 pontos (`CreateProjectRequest.description`,
+`UpdateProjectRequest.description`, `CreateTaskRequest.description`,
+`UpdateTaskRequest.description`):
+
+```
+^[^\x00-\x1F\x7F-\x9F]*(?![\s\S])
+```
+
+Mesmo cuidado do addendum 1 verificado de novo aqui: o `$` simples tem a
+mesma brecha de "casa antes de um `\n` final isolado" — confirmado
+empiricamente antes de aplicar (`"A\n"` casava quando não devia) — e a
+versão final usa o mesmo `(?![\s\S])` como âncora de fim. Varredura
+completa 0x00–0x24F em Python e V8/Node, zero divergências; string vazia e
+string só-espaço continuam batendo (branco continua legal). Os schemas de
+resposta (`Project.description`, `Task.description`) foram deliberadamente
+deixados sem pattern — são campos servidos pelo servidor, não validados na
+entrada.
+
+Verificação local (Schemathesis com a seed exata do achado original) após
+aplicar: os 3 casos de `description` que falhavam agora passam
+("Fuzzing" foi de ❌ para ✅); suíte Java completa, 162/162, sem quebra.
+Um achado à parte surgiu na mesma rodada de verificação — não uma
+regressão desta mudança, e sim um caso de stateful test que só passou a
+ser alcançado porque a sequência aleatória não é mais interrompida cedo
+pelo bug de `description`: uma tentativa de `POST` de tarefa contra um
+projeto que a própria sequência stateful arquivou retorna `422`
+(`task-create-project-archived`, regra de negócio 4, já coberta por
+`ErrorTaxonomyTest.rule4CreateTaskInArchivedProject`) — comportamento
+correto do servidor, mas fora do conjunto de status que o Schemathesis
+espera para uma requisição "schema-compliant" nesse ponto da sequência
+(ele não tem como saber, só pelo schema, que aquele projeto específico
+está arquivado). Não corrigido nesta rodada — fora do escopo aprovado,
+registrado para decisão futura.
+
+**Confirmação do `spec-reviewer`** nesta emenda: os dois pontos de
+regex (classe de caracteres, âncora de fim) CONFIRMED-correct; achou um
+ponto à parte, não uma regressão — nenhum exemplo (`components/examples`
+ou inline) em toda a spec popula o campo `description` com um valor real
+(em branco, preenchido ou `null`) em nenhum payload de sucesso ou erro, o
+que significa que "branco é legal" é verdade pela análise do regex mas
+não tem exemplo formal na spec que o demonstre. Registrado como lacuna
+menor de cobertura de exemplos, não como defeito — decisão de adicionar
+um exemplo explícito de `description` fica para rodada futura.
+
+Com isso, o item 12 está completo: as três lacunas prosa-vs-schema
+achadas por fuzzing nesta série (UUID canônico, não-branco em
+`name`/`title`, caractere de controle em `name`/`title`/`description`)
+estão todas formalizadas no schema.
+
+---
+
+## 13. Limite do fuzzing baseado em schema — não modela invariante stateful de negócio
+
+Fuzzing baseado em schema (Schemathesis) não consegue modelar invariantes
+que dependem de *estado*, não de *forma*: o check `positive_data_acceptance`
+tem uma lista fixa de status esperados para dado schema-válido
+(`2xx, 401, 403, 404, 409, 5xx` — não deriva da spec) e não sabe que este
+projeto tem seis regras de negócio que rejeitam dado schema-válido com
+`422` por causa do estado do recurso, não do formato do corpo. Configurado
+em `schemathesis.toml` (`positive_data_acceptance.expected-statuses`,
+lista completa e explícita, já que a config substitui o default em vez de
+estendê-lo) para tratar `422` documentado como resultado aceito nesta API
+inteira, não só na operação onde o achado apareceu. Quem garante que cada
+`422` está correto — tipo certo, precedência certa, atômico — é a suíte
+determinística (`ErrorTaxonomyTest`), não o fuzzer; o fuzzer serve para
+achar lacuna de *schema*, não para validar regra de negócio.

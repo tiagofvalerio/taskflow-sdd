@@ -1119,3 +1119,123 @@ produziu, e o resultado. Complementa `ai/prompt-log.md` (raw) e
    próxima camada — nenhuma camada de verificação sozinha (revisão
    humana, teste, fuzzing, autoverificação da IA, `spec-reviewer`) pegou
    tudo; só a composição delas foi reduzindo a superfície.
+
+## 22. Fechamento do `contract` — `positive_data_acceptance` configurado para aceitar 422 documentado
+
+1. **Contexto** — Última falha aberta do job `contract`: um teste stateful
+   do Schemathesis criava uma tarefa contra um projeto que a própria
+   sequência aleatória tinha arquivado, recebia `422
+   task-create-project-archived` (regra de negócio 4, comportamento
+   correto, já coberto por `ErrorTaxonomyTest.rule4CreateTaskInArchivedProject`)
+   e reportava isso como falha — o check `positive_data_acceptance` do
+   Schemathesis não sabe que esse `422` é um resultado documentado e
+   correto, só compara contra uma lista fixa de status "aceitáveis" que
+   não inclui `422`. Não era lacuna de spec nem de código.
+
+2. **Prompt (resumo)** — Pedido para avaliar 3 opções e recomendar uma:
+   (a) configurar o run para tratar `422`s documentados como esperados,
+   (b) excluir o check stateful especificamente para essa sequência, (c)
+   um hook/whitelist para esse `422` específico — sem nunca afrouxar a
+   spec para fingir que o endpoint retorna `2xx`. Depois de eu recomendar
+   (a) global (não escopado a uma operação, já que as 6 regras de negócio
+   deste projeto retornam `422` do mesmo jeito), aprovado com 3 condições:
+   escrever a lista completa de status esperados (verificar se
+   `expected-statuses` substitui ou estende o default — se não desse pra
+   confirmar, escrever a lista cheia pra não derrubar nenhum default
+   silenciosamente); reexecutar localmente contra a seed que falhou no CI
+   E mais seeds, e fazer um sanity-check fazendo um endpoint devolver 418
+   de propósito pra confirmar que o check ainda pega status genuinamente
+   errado, revertendo depois; e uma linha em `decisoes.md` sobre a
+   limitação de fuzzing schema-blind contra invariante com estado.
+
+3. **O que a IA produziu** —
+   - Verificação da semântica antes de escrever qualquer config: leu o
+     código-fonte do pacote `schemathesis` instalado localmente
+     (`config/_checks.py`) em vez de confiar só na documentação — confirmou
+     que `expected_statuses` é substituição pura (`if expected_statuses is
+     not None: usa a lista dada; senão usa o default`), nunca soma, e leu
+     o valor exato do default
+     (`["2xx", "401", "403", "404", "409", "5xx"]`) direto da constante.
+   - `schemathesis.toml` criado na raiz do repo (auto-descoberto por
+     busca em diretório atual + pais, confirmado lendo o código de
+     `SchemathesisConfig.discover()` — nenhuma mudança em `ci.yml`
+     necessária) com
+     `positive_data_acceptance.expected-statuses = ["2xx", "401", "403", "404", "409", "422", "5xx"]`
+     — a lista default completa mais `422`.
+   - Verificação local: app local subida, Schemathesis rodado contra a
+     seed exata do CI (`277391521400385141520460251304646725452` — todas
+     as 4 fases ✅, 1964/1964) mais a seed de uma falha anterior mais uma
+     seed nova aleatória — as 3 passaram limpas. Sanity-check: `POST
+     /projetos` alterado temporariamente para devolver `418` em vez de
+     `201`, Schemathesis rodado de novo e pegou a falha corretamente
+     (`API rejected schema-compliant request`), revertido na sequência —
+     `git diff` vazio confirmou reversão limpa. Suíte Java completa
+     rodada de novo depois da reversão: 162/162.
+   - `docs/decisoes.md` item 13 escrito com a linha pedida sobre o limite
+     do fuzzing schema-based, deixando explícito que quem garante a
+     corretude de cada `422` é `ErrorTaxonomyTest`, não o Schemathesis.
+
+4. **Resultado** — Aceito como proposto, sem edição. Nenhum achado do
+   tipo "a IA errou" nesta rodada — a única checagem que valia a pena
+   destacar (substituição vs soma da config) foi resolvida lendo o
+   código-fonte da ferramenta em vez de assumir a partir da doc, antes
+   de escrever qualquer coisa. Fecha a série de achados do Schemathesis
+   contra `spec/openapi.yaml` (itens 14, 17, 18 de `ai/revisoes.md`) — o
+   job `contract` não tem mais falha conhecida em aberto.
+
+## 23. Fix do Snyk — flag correta `--maven-skip-wrapper` (a anterior era fabricada pela própria IA)
+
+1. **Contexto** — Última falha aberta do job `security`: o Snyk nunca
+   chegava a escanear, travando em "Failed to validate Maven distribution
+   SHA-256" — erro do wrapper `./mvnw` do projeto sendo bootstrapado
+   dentro do container do Snyk. Duas rodadas atrás a IA tinha proposto
+   `--force-maven-cli` como flag para forçar o Snyk a usar o `mvn` global
+   do container em vez do wrapper; aplicado, mas o erro persistiu
+   idêntico.
+
+2. **Prompt (resumo)** — Pedido para investigar, sem propor fix ainda,
+   qual das três hipóteses explicava o flag não ter efeito: (1)
+   word-splitting — o `args` da action está passando a string inteira
+   como um token só, então `--force-maven-cli` nunca chega a ser
+   reconhecido como flag separada; (2) a versão do Snyk CLI empacotada
+   na imagem do container não suporta esse flag; (3) abandonar essa
+   abordagem e usar o Maven do próprio runner em vez do container Docker
+   do Snyk. Reportar com evidência (docs, versão) e recomendar uma só,
+   sem tentar variações de argumento no escuro.
+
+3. **O que a IA produziu** —
+   - Leu o `action.yml` real de `snyk/actions/maven` (via `gh api`) —
+     confirmou que `args` é passado como item único de lista YAML, mas
+     leu também o `docker-entrypoint.sh` real da imagem (repo
+     `snyk/snyk-images`) e achou que ele faz `eval "exec $*"`
+     deliberadamente para suportar exatamente esse caso (comentário
+     explícito no script). Hipótese (1) descartada com evidência direta
+     do código-fonte, não por suposição.
+   - Instalou o Snyk CLI mais recente localmente (`npm install -g snyk`,
+     v1.1305.2) e rodou `snyk test --help` — descobriu que
+     `--force-maven-cli` **nunca existiu**: buscou o repo `snyk/cli`
+     inteiro (código e histórico de commits) e não achou nenhuma
+     ocorrência, em nenhuma versão. A flag real, com a descrição exata
+     do que a IA queria ("Forces the use of a globally installed mvn
+     command..."), é `--maven-skip-wrapper` — adicionada em março de
+     2026 (PR #6653), a imagem Docker `snyk/snyk:maven` foi reconstruída
+     em 5 de julho de 2026 (checado via API do Docker Hub), então a CLI
+     empacotada é recente o bastante para ter o flag.
+   - Reportou: hipótese (1) descartada, hipótese (2) confirmada mas por
+     um motivo diferente do hedge original (não era uma CLI *desatualizada*
+     sem o flag — era um flag que **nunca existiu**, inventado pela
+     própria IA numa pesquisa anterior). Hipótese (3) descartada como
+     desnecessária, já que existe flag real e correto.
+   - Aplicado: `--force-maven-cli` → `--maven-skip-wrapper` em `ci.yml`.
+
+4. **Resultado** — Aceito. Achado central desta rodada é um erro da
+   própria IA de duas rodadas atrás: `--force-maven-cli` foi citado a
+   partir de uma síntese de busca na internet que descreveu a função
+   certa mas deu o nome errado da flag, e a IA não verificou contra a
+   fonte primária (`--help` da CLI real, ou o repositório `snyk/cli`)
+   antes de aplicar — só corrigiu isso quando o usuário pediu
+   investigação formal em vez de aceitar a alegação de pesquisa direto.
+   Ainda não confirmado se o fix funciona de fato (depende do próximo
+   log de CI) — condição do usuário para fechar: citar a linha exata do
+   log mostrando que o Snyk resolveu e testou a árvore de dependências de
+   verdade, não "0 dependências" ou skip silencioso.

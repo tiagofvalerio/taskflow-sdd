@@ -755,6 +755,9 @@ components:
         `additionalProperties: false` means submitting `status`, `id`, or
         `createdAt` here is rejected with `400`.
       additionalProperties: false
+      example:
+        name: TaskFlow
+        description: Ferramenta de gestão de projetos e tarefas
       properties:
         name:
           type: string
@@ -765,6 +768,7 @@ components:
           type: string
           nullable: true
           maxLength: 2000
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
       required: [name]
 
     UpdateProjectRequest:
@@ -786,6 +790,7 @@ components:
           type: string
           nullable: true
           maxLength: 2000
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         status:
           $ref: "#/components/schemas/ProjectStatus"
 
@@ -853,6 +858,7 @@ components:
           type: string
           nullable: true
           maxLength: 2000
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         priority:
           $ref: "#/components/schemas/TaskPriority"
       required: [title, priority]
@@ -881,6 +887,7 @@ components:
           type: string
           nullable: true
           maxLength: 2000
+          pattern: '^[^\x00-\x1F\x7F-\x9F]*(?![\s\S])'
         status:
           $ref: "#/components/schemas/TaskStatus"
         priority:
