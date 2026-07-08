@@ -20,7 +20,7 @@
         <pitest-maven.version>1.25.6</pitest-maven.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
         <jacoco-maven-plugin.version>0.8.13</jacoco-maven-plugin.version>
-        <swagger-request-validator.version>2.44.9</swagger-request-validator.version>
+        <swagger-request-validator.version>3.0.0</swagger-request-validator.version>
         <!-- Matches the Testcontainers version used by the Quarkus 3.37 platform (Dev Services) -->
         <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
