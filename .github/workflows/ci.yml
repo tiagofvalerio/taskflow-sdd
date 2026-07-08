@@ -1,0 +1,275 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  JAVA_VERSION: "25"
+  JAVA_DISTRIBUTION: "temurin"
+  POSTGRES_DB: taskflow
+  POSTGRES_USER: taskflow
+  POSTGRES_PASSWORD: taskflow
+
+jobs:
+  test:
+    name: test (unit + integration + contract)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: mvn verify (unit + Testcontainers integration + contract, JaCoCo agent attached)
+        working-directory: quarkus-impl
+        run: ./mvnw -B verify
+
+      - name: Upload JaCoCo report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: quarkus-impl/target/site/jacoco/jacoco.xml
+          retention-days: 7
+
+      - name: Upload build output for Sonar (compiled classes, no rebuild)
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            quarkus-impl/target/classes
+            quarkus-impl/target/test-classes
+            quarkus-impl/target/site/jacoco/jacoco.xml
+          retention-days: 1
+
+  spec-lint:
+    name: spec-lint (redocly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Lint spec/openapi.yaml
+        run: npx --yes @redocly/cli@latest lint spec/openapi.yaml
+
+  sonar:
+    name: sonar (SonarQube Cloud quality gate)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Download build output from test job
+        uses: actions/download-artifact@v6
+        with:
+          name: build-output
+          path: quarkus-impl/target
+
+      - name: SonarQube Cloud scan (Quality Gate required)
+        working-directory: quarkus-impl
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          ./mvnw -B sonar:sonar \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }} \
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }} \
+            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+            -Dsonar.exclusions=**/generated-sources/**,**/target/generated-sources/** \
+            -Dsonar.qualitygate.wait=true
+
+  security:
+    name: security (Snyk + Trivy image + gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Snyk — Maven manifest scan (fail on high/critical)
+        uses: snyk/actions/maven@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --file=quarkus-impl/pom.xml
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Package jar (no tests — already verified by test job)
+        working-directory: quarkus-impl
+        run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=fast-jar
+
+      - name: Build Docker image
+        working-directory: quarkus-impl
+        run: docker build -f src/main/docker/Dockerfile.jvm -t taskflow-quarkus:${{ github.sha }} .
+
+      - name: Trivy — scan built image (fail on high/critical)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: taskflow-quarkus:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: gitleaks — secret scan
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  contract:
+    name: contract (Schemathesis vs spec/openapi.yaml)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Package jar (no tests — already verified by test job)
+        working-directory: quarkus-impl
+        run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=fast-jar
+
+      - name: Boot app against Postgres service
+        working-directory: quarkus-impl
+        env:
+          QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://localhost:5432/${{ env.POSTGRES_DB }}
+          QUARKUS_DATASOURCE_USERNAME: ${{ env.POSTGRES_USER }}
+          QUARKUS_DATASOURCE_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        run: |
+          nohup java -jar target/quarkus-app/quarkus-run.jar > app.log 2>&1 &
+          echo "Waiting for app to become ready..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/q/openapi > /dev/null; then
+              echo "App is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App failed to start:"; cat app.log; exit 1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install Schemathesis
+        run: pip install schemathesis
+
+      - name: Run Schemathesis against spec/openapi.yaml
+        run: st run spec/openapi.yaml --url http://localhost:8080 --checks all
+
+  spec-drift:
+    name: spec-drift (implementation vs spec/openapi.yaml)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Package jar (no tests — already verified by test job)
+        working-directory: quarkus-impl
+        run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=fast-jar
+
+      - name: Boot app against Postgres service
+        working-directory: quarkus-impl
+        env:
+          QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://localhost:5432/${{ env.POSTGRES_DB }}
+          QUARKUS_DATASOURCE_USERNAME: ${{ env.POSTGRES_USER }}
+          QUARKUS_DATASOURCE_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        run: |
+          nohup java -jar target/quarkus-app/quarkus-run.jar > app.log 2>&1 &
+          echo "Waiting for app to become ready..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/q/openapi > /dev/null; then
+              echo "App is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App failed to start:"; cat app.log; exit 1
+
+      - name: Export generated OpenAPI
+        run: curl -sf http://localhost:8080/q/openapi -o generated-openapi.yaml
+
+      - name: Install oasdiff
+        run: curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh
+
+      - name: Diff generated spec against spec/openapi.yaml (fail on breaking drift)
+        run: oasdiff breaking spec/openapi.yaml generated-openapi.yaml --fail-on ERR
+
+  release:
+    name: release-please
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, spec-lint, sonar, security, contract, spec-drift]
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: simple
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attach spec/openapi.yaml to GitHub Release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ steps.release.outputs.tag_name }} spec/openapi.yaml --clobber

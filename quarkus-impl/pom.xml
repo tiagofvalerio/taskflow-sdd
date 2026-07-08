@@ -19,6 +19,7 @@
         <archunit.version>1.4.1</archunit.version>
         <pitest-maven.version>1.25.6</pitest-maven.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
+        <jacoco-maven-plugin.version>0.8.13</jacoco-maven-plugin.version>
         <swagger-request-validator.version>2.44.9</swagger-request-validator.version>
         <!-- Matches the Testcontainers version used by the Quarkus 3.37 platform (Dev Services) -->
         <testcontainers.version>2.0.5</testcontainers.version>
@@ -155,6 +156,26 @@
                         <maven.home>${maven.home}</maven.home>
                     </systemPropertyVariables>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco-maven-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <!-- Mutation testing: not bound to any lifecycle phase — run explicitly
                  with `./mvnw test-compile pitest:mutationCoverage`. Scoped to the

@@ -1654,3 +1654,36 @@ is for local containerized runs (no hosted deployment — evaluators run locally
 per the scope decision in decisoes.md). Do not add docker-compose or any
 orchestration. Flag whether the app needs an external Postgres to run and how
 to point it at one.
+
+---
+**2026-07-07 23:20**
+
+Create .github/workflows/ci.yml for a single-stack (Quarkus) repo. No deploy,
+no hosted database. Stages gated with needs:; PRs run through contract, release
+only on push to main:
+
+1. test: cd quarkus-impl && mvn verify (unit + Testcontainers integration +
+   contract). Runners have Docker. Produce JaCoCo XML.
+2. spec-lint: lint spec/openapi.yaml (redocly or spectral).
+3. sonar: SonarQube Cloud analysis consuming JaCoCo; Quality Gate required;
+   exclude generated code.
+4. security: Snyk (Maven manifest, fail high/critical, SNYK_TOKEN from secrets)
+   + Trivy scanning the built Docker IMAGE (build src/main/docker/Dockerfile.jvm
+   in this job, then scan it, fail high/critical) + gitleaks. Add dependabot.yml
+   (maven, github-actions, docker; weekly).
+5. contract: boot the app, run Schemathesis against spec/openapi.yaml, fail on
+   non-conformance. Check current Schemathesis CLI syntax first.
+6. spec-drift: export the smallrye-generated OpenAPI, diff against
+   spec/openapi.yaml with oasdiff, fail on breaking differences. Verify oasdiff
+   invocation first.
+7. release (main only, needs 1-6): release-please -> semver + CHANGELOG +
+   GitHub Release with spec/openapi.yaml attached.
+
+Before YAML: verify current versions/syntax for the Snyk action, Trivy action,
+Schemathesis CLI, oasdiff, and release-please, and report what you find. Then
+show me the job-dependency graph. Then write the file.
+
+---
+**2026-07-07 23:21**
+
+continue
