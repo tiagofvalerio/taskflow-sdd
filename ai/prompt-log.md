@@ -2072,3 +2072,140 @@ SNYK-JAVA-ORGPOSTGRESQL-17874248. Conditions:
 **2026-07-08 19:58**
 
 /log-ai fix de segurança — pin postgresql 42.7.12 resolvendo CVE alta pega pelo Snyk
+
+---
+**2026-07-08 20:04**
+
+Read /tmp/release-fail.log — everything passed except release-please, which
+failed at "Run googleapis/release-please-action@v4". Quote the exact error and
+classify: is it (a) a permissions issue (the action needs contents:write /
+pull-requests:write in the workflow, or repo Settings > Actions > Workflow
+permissions set to read-only), (b) a config issue (missing release-please
+config/manifest, wrong release-type for a Maven/Java project), or (c) a token
+issue (default GITHUB_TOKEN vs a PAT)? Propose the fix.
+
+---
+**2026-07-08 20:05**
+
+Yes, run it.
+
+---
+**2026-07-08 20:08**
+
+/log-ai fix release-please — habilitada permissão de criação de PR por Actions no repo (can_approve_pull_request_reviews), mantendo default_workflow_permissions em read (grant mínimo)
+
+---
+**2026-07-08 20:21**
+
+Update README.md in Brazilian Portuguese for the delivered project. Sections:
+1. Visão geral: o fluxo SDD seguido (spec-first, contrato como fonte da verdade).
+2. "IA dirigida com intenção — Claude Code como parte da metodologia": explique
+   como o hook (captura automática de prompts), as skills /log-ai /revisar
+   /sdd-check e os subagentes spec-reviewer/domain-guardian/contract-tester
+   foram usados para cumprir os requisitos do desafio; aponte para .claude/ como
+   evidência versionada.
+3. Pré-requisitos (versão do JDK, Docker para os testes de integração) e comandos
+   exatos: rodar a app (./mvnw quarkus:dev), rodar os testes (./mvnw verify),
+   rodar mutação (PIT), e a seção Docker (build/run da imagem).
+4. Decisões de escopo: implementação única (Quarkus), sem deploy hospedado
+   (avaliadores rodam localmente); link para docs/decisoes.md.
+5. Badges: status do CI (GitHub Actions) e quality gate do Sonar, no topo.
+6. Mapa de links para spec/, docs/decisoes.md e ai/.
+
+---
+**2026-07-08 20:23**
+
+Two tasks:
+1. Read ai/prompt-log.md and propose which entries deserve promotion into
+   ai/prompts.md as curated entries. I'll approve each.
+2. Review ai/revisoes.md and reorder it so the strongest entries lead: the
+   retroactive-invariant discovery (regra 6), the CLAUDE.md drift the agent
+   admitted, the Jackson coercion + null-byte bugs Schemathesis caught, the
+   two-failure-modes-of-schema-fuzzing insight, the fabricated Snyk flag caught
+   by investigation, and the real CVE the security gate caught. Keep all entries,
+   just order strongest first.
+Then update ai/skills.md with a short Day-4 retrospective: what actually got
+delegated vs the plan, and the standout moments where reviewing AI output
+mattered.
+
+---
+**2026-07-08 20:31**
+
+yes for the pending one
+
+---
+**2026-07-08 20:47**
+
+Create docs/ferramental-ia.md in Brazilian Portuguese: a dedicated document
+explaining the Claude Code tooling built to drive the AI with intention. This is
+a deliverable aimed at the challenge evaluators — its purpose is to show
+deliberate, engineered AI collaboration, not ad-hoc prompting.
+
+For EACH tool, cover: o que é, por que foi construído (o problema que resolve),
+e o que produziu na prática neste projeto. Cover:
+
+1. Hook UserPromptSubmit (.claude/hooks/log-prompt.sh) — captura automática de
+   todo prompt em ai/prompt-log.md. Por quê: a documentação de uso de IA exigida
+   pelo desafio não podia ser reconstruída de memória; o hook garante registro
+   fiel e verificável.
+2. Skills /log-ai, /revisar, /sdd-check — rituais de um comando. Por quê: tornar
+   a disciplina de documentação (prompts.md, revisoes.md) e a verificação de
+   aderência à spec baratas o suficiente para acontecerem a cada passo, não só no
+   fim.
+3. Subagentes spec-reviewer, domain-guardian, contract-tester — revisão
+   adversarial em contexto isolado. Por quê: fazer a IA revisar criticamente a
+   própria saída; os findings deles alimentaram diretamente o revisoes.md.
+   Dê exemplos concretos do que cada um pegou (ex.: domain-guardian e a pureza
+   hexagonal; spec-reviewer e as 6 rodadas de revisão).
+4. CLAUDE.md — constituição carregada em toda sessão: metodologia SDD, regras de
+   arquitetura, disciplina de documentação, conventional commits.
+5. Plan mode como gate de decisão — a IA propunha opções com trade-offs e eu
+   decidia; exemplos (facts-as-parameters, ids tipados, changeStatusTo).
+
+Close with a short reflection: momentos em que essa engenharia de colaboração
+importou concretamente — ex.: o agente admitindo drift do próprio CLAUDE.md, a
+flag fabricada do Snyk pega por investigação dirigida, os dois modos de falha do
+fuzzing de contrato. Reference ai/revisoes.md for the full record.
+
+Pull the real facts from CLAUDE.md, the .claude/ files, and ai/revisoes.md —
+don't invent. Keep it focused: a reader should finish it understanding how I
+directed the AI and why each mechanism existed. Cross-link from README (the
+methodology section) and note in ai/skills.md that the detailed treatment lives
+here, to avoid duplication.
+
+---
+**2026-07-08 20:50**
+
+Add a "Pipeline CI/CD — prova de aderência automatizada" section to
+docs/decisoes.md (Brazilian Portuguese). Frame it as how the project proves,
+automatically and on every push, that the implementation conforms to the frozen
+spec — directly answering the challenge's Etapa 3. For each stage explain what it
+does and WHY it's there (the problem it guards against), and note the gating
+(needs:) — nothing proceeds unless the prior stage passes:
+
+1. test — mvn verify: unit (domínio), integração com Testcontainers (Postgres
+   real, não H2), e contrato. Por quê Testcontainers e não in-memory: testar
+   contra o banco de produção real.
+2. spec-lint (redocly) — valida o próprio openapi.yaml; config .redocly.yaml
+   desabilita security-defined porque a ausência de auth é decisão de escopo
+   documentada, não defeito.
+3. sonar — quality gate como check obrigatório; qualidade e cobertura.
+4. security (Snyk + Trivy + gitleaks) — Snyk nas dependências Maven, Trivy na
+   imagem Docker, gitleaks para segredos. Cite que o gate pegou uma CVE real
+   (postgresql, alta severidade) que teria ido a produção — prova de valor, não
+   teatro.
+5. contract (Schemathesis) — fuzzing baseado em propriedades contra o
+   openapi.yaml; pegou bugs reais (coerção Jackson, null byte virando 500,
+   enum vazio). Documente as duas limitações que encontramos: schema
+   sub-declarado (corrigido apertando a spec) vs invariantes com estado (o
+   fuzzer não modela; cobertos pela suíte determinística).
+6. release-please — versionamento semântico + CHANGELOG a partir de conventional
+   commits + Release com o spec anexado.
+
+Include a short subsection "O que foi deliberadamente removido ou cortado":
+- spec-drift (oasdiff) removido: comparava a
+
+---
+**2026-07-08 20:53**
+
+you missed the README inside the quarkus application

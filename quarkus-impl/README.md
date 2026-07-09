@@ -4,6 +4,11 @@ This project uses Quarkus, the Supersonic Subatomic Java Framework.
 
 If you want to learn more about Quarkus, please visit its website: <https://quarkus.io/>.
 
+> Para visão geral do projeto, metodologia SDD, e como a IA foi dirigida neste
+> desafio, veja o [README na raiz do repositório](../README.md). Este arquivo
+> cobre só o módulo Quarkus: build, modo dev, native image, e execução via
+> Docker.
+
 ## Running the application in dev mode
 
 You can run your application in dev mode that enables live coding using:
@@ -23,17 +28,17 @@ The application can be packaged using:
 ```
 
 It produces the `quarkus-run.jar` file in the `target/quarkus-app/` directory.
-Be aware that it’s not an _über-jar_ as the dependencies are copied into the `target/quarkus-app/lib/` directory.
+Be aware that it’s not an _uber-jar_ as the dependencies are copied into the `target/quarkus-app/lib/` directory.
 
 The application is now runnable using `java -jar target/quarkus-app/quarkus-run.jar`.
 
-If you want to build an _über-jar_, execute the following command:
+If you want to build an _uber-jar_, execute the following command:
 
 ```shell script
 ./mvnw package -Dquarkus.package.jar.type=uber-jar
 ```
 
-The application, packaged as an _über-jar_, is now runnable using `java -jar target/*-runner.jar`.
+The application, packaged as an _uber-jar_, is now runnable using `java -jar target/*-runner.jar`.
 
 ## Creating a native executable
 

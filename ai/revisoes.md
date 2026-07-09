@@ -4,55 +4,11 @@ Registro honesto de correções, rejeições e ajustes aplicados sobre o que a I
 gerou neste projeto. Objetivo: documentar onde a IA errou, foi ingênua ou
 incompleta, e por quê — não é um changelog de features.
 
----
-
-## 1. Schemas do OpenAPI modelados como entidade de banco
-
-1. **Data / Fase** — 2026-07-04, fase de especificação (`spec/openapi.yaml`, v1 → v2).
-
-2. **O que a IA sugeriu** — Um único schema por recurso, reutilizado em request
-   e response (`Projeto`, `Tarefa`), incluindo campos `readOnly` como `id`,
-   `createdAt`, `completedAt`, `projectId` no mesmo objeto usado para
-   `POST`/`PATCH`. Rejeição de campo indevido ficava só a cargo de
-   `readOnly: true` na doc, sem `additionalProperties: false` nos requests.
-
-3. **Problema identificado** — Isso modela o contrato como se fosse a
-   representação de banco, não como uma interface de API. `readOnly: true`
-   é só metadado de documentação no OpenAPI 3.0 — a maioria dos geradores de
-   código e validadores de schema NÃO o usa para rejeitar o campo se ele vier
-   no body. Resultado prático: um client poderia mandar `completedAt` ou
-   `id` no `PATCH` e, dependendo da ferramenta usada para validar contra o
-   schema, isso passaria silenciosamente. Também misturava, no mesmo tipo,
-   dado de entrada (o que o client controla) com dado derivado pelo sistema
-   (o que o servidor decide) — RICH domain model exige essa fronteira clara
-   também no contrato, não só no código.
-
-4. **Correção aplicada** — Separação em três schemas por recurso:
-   `CreateXRequest` (só campos aceitos na criação), `UpdateXRequest` (só
-   campos patchable) e `X` como shape de response completo. Todo schema de
-   request ganhou `additionalProperties: false`, que é enforcement real de
-   schema (não documentação) — qualquer campo fora da lista, incluindo os
-   `readOnly` da entidade, é rejeitado com `400`. Isso tornou explícita a
-   decisão de que campos de sistema nunca são um "input opcional que o
-   client pode ignorar": eles simplesmente não existem no schema de request.
-
-   Decisão associada, mesma revisão: `completedAt` enviado manualmente no
-   `PATCH /tarefas/{id}` = **400**, não 422. Raciocínio: `completedAt` é
-   `readOnly`, controlado pelo domínio (`Task#complete`); sua presença no
-   body é um problema de forma do request (contrato), equivalente a mandar
-   `id` ou `createdAt` — não é uma regra de negócio violada por um request
-   bem formado. Reservei `422` só para os 4 invariantes de domínio reais
-   (arquivar com tarefa in_progress, deletar tarefa não-pending, regressão
-   de status, criar tarefa em projeto arquivado). Documentei a decisão na
-   própria descrição do response `400` desses dois endpoints, e removi o
-   comentário YAML com as duas opções que eu tinha deixado em aberto na v1.
-
-5. **Lição** — Ao pedir spec de API pra IA, pedir explicitamente "schemas de
-   request separados de response, com `additionalProperties: false`" — do
-   contrário a IA tende a gerar um schema por recurso (mais compacto, "DRY"
-   na superfície) que na prática vaza a forma de persistência pro contrato
-   e depende de `readOnly` (fraco) em vez de `additionalProperties: false`
-   (forte) pra proteger campos de sistema.
+> Ordenado por força do achado, não por ordem cronológica: as entradas mais
+> reveladoras sobre como dirigir IA neste domínio vêm primeiro. A numeração de
+> cada entrada (`## N.`) é o identificador original, preservado para as
+> referências cruzadas no texto (ex.: "entrada 9") continuarem válidas — não
+> corresponde à posição no documento.
 
 ---
 
@@ -112,72 +68,6 @@ incompleta, e por quê — não é um changelog de features.
    pena justamente porque achou o tipo de lacuna que quem escreveu o spec
    tende a não ver — vale repetir esse padrão a cada rodada de spec antes
    de congelar pra implementação.
-
----
-
-## 3. Rodada 2 do spec-reviewer — minhas próprias correções da rodada 1 se contradiziam
-
-1. **Data / Fase** — 2026-07-04, fase de especificação (`spec/openapi.yaml`,
-   segunda revisão adversarial via agente `spec-reviewer`, 16 achados, sobre
-   o spec já corrigido pela entrada 2 acima).
-
-2. **O que a IA sugeriu** — Na rodada 1 eu tinha, na mesma leva de mudanças:
-   (a) declarado "same-state PATCH é sempre no-op 200" como decisão de
-   escopo genérica, e (b) criado a regra de negócio 6 dizendo "status de
-   tarefa não pode mudar se o projeto está arquivado" — sem checar se as
-   duas convivem. Também, na mesma rodada, "corrigi" a falta de exemplos de
-   400 (achado #7 da rodada 1) consolidando tudo num único componente
-   `BadRequest` reaproveitado por todo endpoint, com os mesmos 5 exemplos e
-   o mesmo `type` URI (`invalid-request-body`) pra casos de corpo, path e
-   query string.
-
-3. **Problema identificado** — Duas contradições que eu mesmo introduzi
-   tentando corrigir a rodada anterior, achadas pelo agente `spec-reviewer`
-   numa segunda passada (não por mim relendo):
-   - **Conflito no-op vs. regra 6**: reenviar `status` com o valor atual de
-     uma tarefa cujo projeto está arquivado — é no-op 200 (primeira
-     decisão) ou 422 de regra 6 (segunda decisão)? O spec da rodada 1 não
-     dizia qual das duas minhas próprias regras vencia. Eu criei a regra 6
-     pensando só no caso "tentar avançar status", sem testar o caso
-     "reenviar o mesmo status" contra ela.
-   - **BadRequest consolidado sobre-generalizou a correção anterior**: ao
-     resolver "faltam exemplos de 400" (achado #7 da rodada 1) do jeito
-     mais simples — um componente único reaproveitado em todo lugar —
-     criei um problema novo: todo endpoint passou a "documentar" exemplos
-     irrelevantes pra ele (ex.: `GET /projetos`, que não tem path id nem
-     body, documentava exemplo de `completedAt` num PATCH e de UUID
-     malformado num path que ela nem tem) e um único `type` URI
-     ("invalid-request-body") cobrindo path/query/body — o que é
-     tecnicamente errado (RFC 7807 usa `type` justamente pra diferenciar
-     categorias de problema; "invalid **request body**" descrevendo um
-     erro de path parameter é uma contradição textual).
-
-4. **Correção aplicada** — Precedência explícita: no-op vence a regra 6
-   ("reenviar o status atual não é uma mudança de status, logo não é
-   violação de regra de negócio, mesmo com projeto arquivado") — declarada
-   tanto na decisão de escopo quanto no texto da própria regra 6 e na
-   descrição do `PATCH /tarefas/{id}`, pra não depender de quem lê achar
-   uma e não a outra. Regra 6 também foi reformulada como *blacklist*
-   (status é o único campo travado; title/description/priority continuam
-   editáveis) em vez de *whitelist* implícita, que deixava a real do
-   `priority` ambígua. `BadRequest` foi desmembrado em três componentes —
-   `InvalidRequestBody` (schema body, `ValidationProblemDetails`),
-   `InvalidPathParameter` e `InvalidQueryParameter` (ambos `ProblemDetails`
-   simples) — cada um com `type` URI próprio, e cada endpoint religado só
-   aos exemplos que ele pode de fato produzir (endpoints com duas causas
-   possíveis, tipo `PATCH` com path+body, usam `oneOf` combinando os dois
-   schemas). Também formalizei precedência de validação (400 → 404 → 422,
-   a primeira falha vence e nunca chega na próxima etapa) e permiti
-   desarquivamento (`archived → active`) explicitamente, que antes existia
-   só implicitamente no enum sem nenhuma regra dizer se era permitido.
-
-5. **Lição** — Corrigir um achado isoladamente pode contradizer uma decisão
-   já tomada ou sobre-generalizar de um jeito que cria um achado novo (mais
-   sutil) no lugar do antigo; depois de aplicar uma leva de correções, vale
-   rodar a revisão adversarial de novo sobre o resultado, não assumir que
-   "resolvido" = "sem novos problemas" — foi exatamente essa segunda
-   passada que achou os dois conflitos acima, que eu não veria relendo meu
-   próprio spec.
 
 ---
 
@@ -249,6 +139,481 @@ incompleta, e por quê — não é um changelog de features.
    difícil de notar — vale sempre perguntar "esse componente compartilhado
    é usado por endpoints que genuinamente têm o mesmo formato de erro, ou
    só por conveniência de escrita?" antes de consolidar.
+
+---
+
+## 12. Coerção escalar do Jackson — drift de contrato invisível, pego pelo /sdd-check
+
+1. **Data / Fase** — 2026-07-07, fase de implementação Quarkus (adapters
+   já commitados e auditados; achado da primeira rodada do `/sdd-check`,
+   corrigido em `5d20b93`).
+
+2. **O que a IA sugeriu** — Os request DTOs tipavam todos os campos como
+   `String` (decisão deliberada e correta em si: permitia coletar todos
+   os erros de enum/validação de uma vez em `errors[]`, em vez do
+   fail-fast do Jackson). O que a IA não configurou foi a coerção
+   escalar default do Jackson por baixo disso: `{"name": 123}` era
+   silenciosamente coagido para `"123"` e aceito com `201`.
+
+3. **Problema identificado** — A spec declara `type: string`; um número
+   JSON não é uma string, e a requisição deveria falhar com `400`
+   `invalid-request-body`. O drift era duplamente invisível: (a) nenhum
+   teste enviava tipo errado em campo de texto — o mesmo padrão
+   recorrente das entradas 9 e 11 (mais adiante neste documento): a
+   suíte testava o que foi escrito, não o espaço de entradas que o
+   contrato promete; (b) a auditoria de código do
+   `domain-guardian` (quarta passada) também não pegou, porque não há
+   linha errada pra apontar — o defeito era um *default de framework
+   não configurado*, exatamente a categoria "o que nunca foi escrito".
+   Quem pegou foi o `/sdd-check`, comparação sistemática spec×código —
+   a própria IA reportou o drift contra o próprio código, no modo
+   report-only pedido. Notável: campos de enum não eram afetados (o
+   valor coagido falhava na validação de domínio de valores), só os de
+   texto livre.
+
+4. **Correção aplicada** — `JacksonCoercionConfig` implements
+   `ObjectMapperCustomizer` (global pra camada REST, não por DTO):
+   coerção `Integer`/`Float`/`Boolean` → alvo textual configurada como
+   `CoercionAction.Fail`, escopada a `LogicalType.Textual` — DTOs não
+   têm campo numérico (direção inversa sem o que configurar) e a
+   serialização de resposta fica intacta. A falha vira
+   `MismatchedInputException`, que os mappers de erro do Jackson
+   (entrada 11, mais adiante) já convertem no `400 invalid-request-body`
+   com o campo nomeado — nenhum
+   mapper novo, nenhum 500 cru. Dois testes de taxonomia novos:
+   `{"name": 123}` → 400/`name`; `{"priority": 1}` → 400/`priority`.
+   O código mudou, a spec ficou intocada — direção única do fluxo SDD.
+   Segunda rodada do `/sdd-check`: zero drift. Suíte 121/121.
+
+5. **Lição** — Default tolerante de framework é fonte de drift que nem
+   revisão de código nem a suíte que o autor escreveu enxergam — só
+   comparação sistemática contra o contrato (e, mecanicamente, a suíte
+   de contrato/Schemathesis do próximo passo); conformidade não é o que
+   o código faz, é o que o framework deixa passar por ele.
+
+---
+
+## 17. Lacuna prosa-vs-schema no `openapi.yaml` congelado — pega pelo Schemathesis, não por 6 rodadas de revisão humana
+
+1. **Data / Fase** — 2026-07-08, primeira execução real do pipeline de CI
+   (job `contract`, Schemathesis contra `spec/openapi.yaml`), já com a
+   spec formalmente "congelada" (ver item 10).
+
+2. **O que a IA sugeriu** — Nada de errado a corrigir na primeira
+   passada: a IA (eu) escreveu `spec/openapi.yaml` com
+   `ProjectIdParam`/`TaskIdParam` como `type: string, format: uuid` (sem
+   `pattern`) e `name`/`title` como `minLength: 1, maxLength: N` (sem
+   restrição de whitespace) — e a prosa ao lado (`info.description`,
+   exemplos `ProjectNameInvalid`/`TaskTitleInvalid`) já prometia
+   exatamente as regras mais estritas que o JSON Schema formal não
+   codificava: UUID canônico case-insensitive só no shape 8-4-4-4-12, e
+   "não pode estar em branco" além do comprimento. A implementação
+   (`UuidPathParamFilter`, `BodyValidation.invalidText`) já fazia a coisa
+   certa desde o início.
+
+3. **Problema identificado** — Schemathesis gera dados a partir do JSON
+   Schema formal, não da prosa. `format: uuid` não é validado por
+   nenhuma engine de schema (é só anotação); `minLength: 1` sozinho
+   aceita uma string de um único espaço. Rodando contra a API real, a
+   ferramenta gerou UUIDs de path em forma não-canônica e nomes/títulos
+   só-espaço, viu a API rejeitar corretamente (400), e reportou isso
+   como "schema constraints don't match API validation" em 6 operações —
+   um sinal de que o *schema* estava sub-declarado, não de que a API
+   estava errada. Seis rodadas de revisão adversarial humana/IA sobre a
+   spec (itens 1–9, 14) nunca pegaram essa lacuna especificamente porque
+   revisão de prosa lê "canônico" e "não pode estar em branco" e
+   preenche mentalmente a implicação de schema — a ferramenta de fuzzing
+   não faz essa inferência, só lê o que está formalmente declarado.
+
+4. **Correção aplicada** — `pattern` adicionado em 6 pontos, todos
+   *aditivos* (nenhum `minLength`/`maxLength` removido ou enfraquecido):
+   `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+   em `ProjectIdParam`/`TaskIdParam` (case-insensitive — verifiquei antes
+   de aplicar que uma leitura lowercase-only contradiria a decisão já
+   fixada no item 3 deste documento e quebraria
+   `uppercaseHexUuidPassesPathValidation`; o humano confirmou
+   case-insensitive quando perguntado), e `.*\S.*` em
+   `CreateProjectRequest.name`, `UpdateProjectRequest.name`,
+   `CreateTaskRequest.title`, `UpdateTaskRequest.title`. Por ser emenda à
+   spec congelada, passou por `spec-reviewer` como confirmação dedicada
+   antes do commit (achou os dois regexes corretos, sem contradição nova
+   com prosa/exemplos existentes) e pela suíte de contrato completa
+   (162/162, sem quebra — validação client-side é desligada
+   deliberadamente nos testes Java, então o aperto do schema não afeta
+   os testes existentes, só ferramentas externas como o Schemathesis).
+   Ver `docs/decisoes.md` item 12 para o racional completo.
+
+5. **Lição** — Fuzzing baseado em schema mede a fidelidade do próprio
+   schema, não da implementação: ele expõe exatamente a categoria de
+   lacuna que revisão humana de prosa estrutura mal para achar (mesma
+   lição do item 1 sobre "o que nunca foi escrito") — porque a máquina
+   não preenche intenção a partir de texto, só valida o que está
+   formalmente declarado. Rodar a suíte de contrato contra a API viva,
+   cedo, teria achado isso antes da spec ser declarada congelada; rodá-la
+   depois ainda vale, mas transforma toda emenda subsequente em mudança
+   de artefato já "fechado" — daí o cuidado extra (spec-reviewer
+   dedicado) que esta emenda específica recebeu.
+
+---
+
+## 18. Meio-fechamento do item 17 — o pattern de "não-branco" formalizou metade da regra e escondeu a outra metade
+
+1. **Data / Fase** — 2026-07-08, execução seguinte do pipeline de CI
+   após o fechamento do item 17 (patterns de UUID canônico e não-branco
+   já aplicados e "confirmados" pelo `spec-reviewer`).
+
+2. **O que a IA sugeriu** — No item 17, o pattern aplicado a
+   `name`/`title` foi `pattern: '.*\S.*'` — só a metade "não pode estar
+   em branco" da mensagem de exemplo (`ProjectNameInvalid`/
+   `TaskTitleInvalid`: "não pode estar em branco **e** deve ter no
+   máximo N caracteres"). A implementação (`BodyValidation.hasControlChar`,
+   chamada por `invalidText` desde uma correção anterior desta mesma
+   sessão) também rejeita qualquer caractere de controle — regra que já
+   existia, já testada, já documentada — mas essa segunda metade nunca
+   virou `pattern` no schema. O `spec-reviewer` disparado no item 17
+   revisou exatamente esse pattern e não achou o problema, porque a
+   pergunta feita a ele foi "esse regex está correto para 'não-branco'?"
+   — nunca "esse regex cobre TODA a regra que o código aplica?". O
+   escopo da pergunta limitou o que a revisão podia achar.
+
+3. **Problema identificado** — Schemathesis, rodando contra a API real,
+   gerou strings com caracteres de controle ASCII reais (0x07 BEL,
+   0x1C FS) misturados com texto comum (`"=A"`) — que satisfazem
+   `.*\S.*` (caractere de controle não é whitespace) mas que a API
+   corretamente rejeita. 4 falhas de "API rejected schema-compliant
+   request" — a mesma categoria do item 17, não uma nova: formalizar
+   *parte* de uma regra existente no schema deixa a parte não-formalizada
+   exatamente tão invisível para fuzzing quanto estava antes de qualquer
+   pattern existir. Meio-fechamento tem o mesmo efeito prático que
+   nenhum fechamento, para a parte que ficou de fora.
+
+4. **Correção aplicada** — Antes de aplicar, a IA testou o próprio
+   regex proposto (`^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*$`) contra os 256
+   codepoints 0x00–0xFF em Python e achou um bug nele mesmo: o `$` do
+   Python (e do Java) casa tanto no fim absoluto da string quanto na
+   posição logo antes de um `\n` final isolado — `"A\n"` casava com o
+   pattern quando não devia (`\n` é caractere de controle). Trocado
+   `$` por `(?![\s\S])` (lookahead de "nenhum caractere segue"), que não
+   tem essa exceção em nenhum motor, e essa versão foi validada em
+   Python E em Node/V8 (o motor ECMA-262 que a OpenAPI declara) antes de
+   ser aplicada nos 4 pontos. Rodada local do Schemathesis com a mesma
+   seed do achado original confirmou os 4 casos resolvidos — mas expôs
+   um quinto, adjacente: `description` tem a mesma `hasControlChar` no
+   código e nenhum pattern no schema (não estava no escopo desta
+   rodada — `description` é opcional/nullable, então o pattern não pode
+   ser o mesmo `.*\S.*`-based; registrado em `docs/decisoes.md` item 12
+   como pendência, não aplicado ainda). O `spec-reviewer` rodado nesta
+   emenda, por sua vez, achou uma quarta camada: `(?=.*\S)` usa `.`, e
+   o `.` do Python exclui só `\n`, enquanto o `.` do ECMA-262 (o motor
+   nominal da spec) também exclui U+2028/U+2029 — que não são
+   caracteres de controle e deveriam ser aceitos, mas um validador JS
+   estrito os rejeitaria via esse pattern. A varredura de codepoints
+   feita pela IA (0x00–0x24F) nunca tocou U+2028/U+2029 — não cobria o
+   ponto exato da divergência. Achado reportado ao usuário, correção
+   (`(?=.*\S)` → `(?=[\s\S]*\S)`) ainda não aplicada, aguardando decisão.
+
+5. **Lição** — Cada rodada desta série (itens 14, 17, 18) fechou um
+   pouco e abriu o próximo: 6 rodadas de revisão de prosa não acharam a
+   lacuna schema-vs-prosa (item 17); a primeira correção do schema
+   formalizou só metade de uma regra e a fuzzing achou a outra metade
+   (este item); a correção da segunda metade tinha um bug de motor de
+   regex que só apareceu numa varredura de codepoints feita pela própria
+   IA antes de aplicar; e mesmo essa versão corrigida tinha uma
+   divergência de engine que só o `spec-reviewer` achou, numa faixa de
+   codepoints que a varredura da IA nunca tinha testado. Nenhuma camada
+   de verificação (revisão humana, teste de código, fuzzing de contrato,
+   verificação própria da IA, revisão adversarial de agente) pegou
+   tudo sozinha — cada uma pegou uma fatia diferente do mesmo problema
+   recorrente, e só a composição delas, rodada após rodada, foi reduzindo
+   a superfície do que sobrava. Dirigir IA em domínio de correção formal
+   (regex, schema) exige pedir verificação *específica e exaustiva*
+   ("varra todos os codepoints", "teste em dois motores") — pedir só
+   "isso está certo?" produz uma confirmação tão limitada quanto o
+   escopo da pergunta.
+
+---
+
+## 13. Testes de taxonomia sobre-especificados — igualdade exata em prosa ilustrativa da spec
+
+1. **Data / Fase** — 2026-07-07, camada de validação de contrato do
+   `quarkus-impl` (matriz de cobertura do agente `contract-tester` +
+   validação de schema nas respostas; corrigido em `f4d8eb4`).
+
+2. **O que a IA sugeriu** — Nos testes de taxonomia escritos em fases
+   anteriores, a própria IA asseriu strings de `detail`/`message` com
+   igualdade exata, copiadas dos `components.examples` da spec:
+
+   ```java
+   .body("detail", equalTo("Nenhum projeto encontrado com id " + unknown))
+   .body("detail", equalTo("O identificador informado não é um UUID válido."))
+   .body("errors[0].message", equalTo("deve ser um UUID válido"))
+   ```
+
+3. **Problema identificado** — O agente `contract-tester`, ao montar a
+   matriz de cobertura, flagrou sobre-especificação nos meus próprios
+   testes de taxonomia: igualdade exata em strings de detail copiadas
+   dos examples da spec — examples em OpenAPI são ilustrativos, não
+   normativos (o schema só exige `detail` legível), e a exigência
+   forçaria o Rails a reproduzir as frases do Java caractere a
+   caractere, divergência que o contrato nunca prometeu. O ponto sutil:
+   o drift aqui é *para mais* — os testes exigiam mais do que a spec
+   promete, o espelho do padrão de sub-especificação que aparece nas
+   entradas 9, 10, 11 e 12 deste documento, onde a suíte exigia
+   *de menos*. Ambos são desvio do contrato; este passaria despercebido
+   até o dia 3, quando a suíte Rails ou reproduziria frases em
+   português do Java ou "falharia" sem violar contrato algum.
+
+4. **Correção aplicada** — Política de asserção explícita, decidida
+   pelo usuário sobre o achado e documentada no javadoc do
+   `ErrorTaxonomyTest` (vale também para a suíte Rails):
+   - **Normativo — igualdade exata**: `type` URI, status HTTP, membro
+     `status` do problem, shape do schema, `errors[].field`, resultados
+     de precedência.
+   - **Ilustrativo — token de carga (`containsString`)**: prosa de
+     `detail`/`message`, com tokens escolhidos para provar que a regra
+     certa disparou (ex.: `"retroceder"` para regra 5, `"estiver
+     arquivado"` para regra 6).
+   - **Exceção — exata**: texto que a política normativa de erros da
+     spec cita verbatim (os details de filtro de query).
+   Igualdades exatas ilustrativas abrandadas para tokens; asserções
+   normativas mantidas (e reforçadas: as seis regras 422 agora asserem
+   `type` + `status` + token do `detail`).
+
+5. **Lição** — Testes também driftam do contrato — para mais, não só
+   para menos: asserção mais forte que a promessa da spec vira contrato
+   fantasma que a segunda implementação herda sem nunca ter sido
+   pactuado; a fronteira normativo/ilustrativo precisa ser política
+   explícita da suíte, não hábito do gerador.
+
+---
+
+## 20. Flag fabricada do Snyk — `--force-maven-cli` citada por síntese de busca, nunca existiu
+
+1. **Data / Fase** — 2026-07-08, fase de CI/CD (pipeline de segurança).
+   Erro cometido na correção de pipeline round 2; achado e corrigido na
+   rodada seguinte, sobre investigação formal pedida pelo usuário.
+
+2. **O que a IA sugeriu** — Diagnosticando por que o job `security`
+   nunca chegava a escanear (`snyk/actions/maven@master` falhava antes
+   de rodar), a IA propôs e aplicou `--force-maven-cli` aos args do
+   Snyk em `ci.yml`, citada como a flag que força o uso do Maven
+   instalado globalmente em vez do wrapper embarcado na imagem
+   `snyk/snyk:maven`. A descrição da função estava certa; o nome da
+   flag, não.
+
+3. **Problema identificado** — Rodada seguinte, o mesmo erro
+   ("Failed to validate Maven distribution SHA-256") persistiu
+   idêntico — sinal de que a flag não estava surtindo efeito. Pedida
+   investigação formal (não mais uma tentativa de nome no escuro), a
+   IA instalou a CLI mais recente do Snyk localmente
+   (`npm install -g snyk`, v1.1305.2), rodou `snyk test --help` e
+   buscou o repositório `snyk/cli` inteiro (código e histórico de
+   commits): `--force-maven-cli` **nunca existiu em nenhuma versão**.
+   A flag tinha sido citada a partir de uma síntese de busca na
+   internet de uma rodada anterior — que descreveu corretamente a
+   *função* desejada mas inventou o *nome* — e a IA aplicou direto ao
+   `ci.yml` sem checar contra a fonte primária (`--help` da CLI real,
+   ou o próprio repositório `snyk/cli`) antes de propor a mudança.
+
+4. **Correção aplicada** — A flag real, com a descrição exata da
+   função pretendida ("Forces the use of a globally installed mvn
+   command..."), é `--maven-skip-wrapper` — adicionada em março de
+   2026 (PR #6653); a imagem Docker `snyk/snyk:maven` foi reconstruída
+   em 5 de julho de 2026 (confirmado via API do Docker Hub), então a
+   CLI empacotada era recente o bastante para já ter o flag.
+   `--force-maven-cli` → `--maven-skip-wrapper` em `ci.yml`. A troca
+   só foi aceita como fechada depois que o log de CI seguinte mostrou
+   o Snyk de fato escaneando a árvore de dependências real (177
+   dependências testadas), não um "0 dependências" ou skip silencioso
+   — condição posta explicitamente antes de aceitar.
+
+5. **Lição** — Uma alegação de pesquisa (mesmo quando a *função*
+   descrita está certa) não é fonte primária: nome de flag/parâmetro
+   de CLI precisa de verificação direta (`--help`, código-fonte,
+   changelog) antes de entrar em configuração que só falha em CI, onde
+   o ciclo de feedback é lento e caro. O erro só foi pego porque o
+   usuário recusou aceitar "deve ser isso" numa segunda tentativa e
+   pediu investigação formal com evidência, em vez de mais um chute de
+   nome — a IA não teria achado sozinha sem esse pedido explícito.
+
+---
+
+## 19. Gate de segurança provou seu valor — CVE real no driver postgresql pego só depois do fix do Snyk (item ligado ao 17/18)
+
+1. **Data / Fase** — 2026-07-08, fase de CI/CD (pipeline de segurança:
+   Snyk + Trivy + gitleaks), depois da correção da flag do Maven CLI
+   (`--maven-skip-wrapper`) que destravou o step do Snyk.
+
+2. **O que a IA sugeriu** — Nas rodadas anteriores (`ci: fix pipeline`),
+   o foco foi só destravar o step do Snyk em si — a flag certa para o
+   CLI Maven embarcado na imagem `snyk/snyk:maven` validar a distribuição
+   sem quebrar em "Failed to validate Maven distribution SHA-256". Nenhuma
+   suposição foi feita sobre o que o scan ia encontrar depois de rodar —
+   o objetivo daquelas rodadas era só "o Snyk consegue rodar", não "o
+   Snyk aprova".
+
+3. **Problema identificado** — Assim que o Snyk finalmente escaneou de
+   verdade (177 dependências), achou 1 vulnerabilidade real de severidade
+   alta: `SNYK-JAVA-ORGPOSTGRESQL-17874248` ("Incorrect Implementation of
+   Authentication Algorithm") em `org.postgresql:postgresql@42.7.11`,
+   puxado transitivamente por `io.quarkus:quarkus-jdbc-postgresql@3.37.1`,
+   que por sua vez vem do `quarkus-bom@3.37.1` — o BOM oficial da
+   plataforma, considerado "confiável" por definição. Isso mostra que
+   confiar num BOM gerenciado não é garantia de dependências livres de
+   CVE: o BOM fixa versões por compatibilidade testada, não por ausência
+   de vulnerabilidade conhecida, e um driver JDBC de banco (superfície
+   de autenticação) é exatamente o tipo de dependência transitiva que
+   ninguém audita manualmente. Sem o gate de Snyk rodando de fato — e
+   sem as duas rodadas anteriores insistindo em destravar a flag certa
+   em vez de aceitar o step vermelho — essa CVE teria ido para produção
+   silenciosamente, mascarada pelo verde do resto do pipeline.
+
+4. **Correção aplicada** — Override de versão em `dependencyManagement`
+   no `quarkus-impl/pom.xml`, declarado *depois* do import do
+   `quarkus-bom` (ordem importa: a entrada mais específica declarada
+   por último no mesmo `dependencyManagement` vence a do BOM importado),
+   fixando `org.postgresql:postgresql` em `42.7.12` via propriedade
+   `postgresql.version`, versão onde o Snyk reporta a issue como
+   corrigida. Verificação em duas camadas antes de aceitar como pronto:
+   `mvn dependency:tree -Dincludes=org.postgresql:postgresql` confirmando
+   que a versão efetivamente resolvida no grafo é `42.7.12` (não bastava
+   só declarar — BOMs e overrides têm regras de precedência que podem
+   silenciosamente não pegar), e `./mvnw verify` completo (162 testes,
+   incluindo os testes de integração via Testcontainers que sobem
+   Postgres de verdade) confirmando que o bump de patch não quebrou
+   nada em runtime. O Snyk local não pôde ser reexecutado para confirmar
+   (401 — sessão não autenticada), então a confirmação final fica
+   pendente da próxima rodada de CI, registrada como tal em vez de
+   assumida como certa.
+
+5. **Lição** — Um gate de segurança só entrega valor quando ele
+   efetivamente roda e efetivamente falha quando deveria: as duas
+   rodadas anteriores gastas destravando a flag do Maven CLI não foram
+   trabalho de infraestrutura desperdiçado, foram a pré-condição para
+   este achado real. Dirigir IA em pipeline de segurança exige separar
+   "o step passou" de "o step rodou de verdade" — um step verde por
+   erro de configuração (ex: SHA-256 do Maven falhando antes de sequer
+   escanear) é pior que um step vermelho, porque cria falsa sensação de
+   cobertura. E mesmo depois do fix, aceitar a correção proposta pela
+   IA exige verificação de efeito real (dependency:tree, não só o
+   diff do pom.xml) — declarar uma versão em XML não garante que o
+   resolvedor de dependências do Maven vai de fato usá-la.
+
+---
+
+## 1. Schemas do OpenAPI modelados como entidade de banco
+
+1. **Data / Fase** — 2026-07-04, fase de especificação (`spec/openapi.yaml`, v1 → v2).
+
+2. **O que a IA sugeriu** — Um único schema por recurso, reutilizado em request
+   e response (`Projeto`, `Tarefa`), incluindo campos `readOnly` como `id`,
+   `createdAt`, `completedAt`, `projectId` no mesmo objeto usado para
+   `POST`/`PATCH`. Rejeição de campo indevido ficava só a cargo de
+   `readOnly: true` na doc, sem `additionalProperties: false` nos requests.
+
+3. **Problema identificado** — Isso modela o contrato como se fosse a
+   representação de banco, não como uma interface de API. `readOnly: true`
+   é só metadado de documentação no OpenAPI 3.0 — a maioria dos geradores de
+   código e validadores de schema NÃO o usa para rejeitar o campo se ele vier
+   no body. Resultado prático: um client poderia mandar `completedAt` ou
+   `id` no `PATCH` e, dependendo da ferramenta usada para validar contra o
+   schema, isso passaria silenciosamente. Também misturava, no mesmo tipo,
+   dado de entrada (o que o client controla) com dado derivado pelo sistema
+   (o que o servidor decide) — RICH domain model exige essa fronteira clara
+   também no contrato, não só no código.
+
+4. **Correção aplicada** — Separação em três schemas por recurso:
+   `CreateXRequest` (só campos aceitos na criação), `UpdateXRequest` (só
+   campos patchable) e `X` como shape de response completo. Todo schema de
+   request ganhou `additionalProperties: false`, que é enforcement real de
+   schema (não documentação) — qualquer campo fora da lista, incluindo os
+   `readOnly` da entidade, é rejeitado com `400`. Isso tornou explícita a
+   decisão de que campos de sistema nunca são um "input opcional que o
+   client pode ignorar": eles simplesmente não existem no schema de request.
+
+   Decisão associada, mesma revisão: `completedAt` enviado manualmente no
+   `PATCH /tarefas/{id}` = **400**, não 422. Raciocínio: `completedAt` é
+   `readOnly`, controlado pelo domínio (`Task#complete`); sua presença no
+   body é um problema de forma do request (contrato), equivalente a mandar
+   `id` ou `createdAt` — não é uma regra de negócio violada por um request
+   bem formado. Reservei `422` só para os 4 invariantes de domínio reais
+   (arquivar com tarefa in_progress, deletar tarefa não-pending, regressão
+   de status, criar tarefa em projeto arquivado). Documentei a decisão na
+   própria descrição do response `400` desses dois endpoints, e removi o
+   comentário YAML com as duas opções que eu tinha deixado em aberto na v1.
+
+5. **Lição** — Ao pedir spec de API pra IA, pedir explicitamente "schemas de
+   request separados de response, com `additionalProperties: false`" — do
+   contrário a IA tende a gerar um schema por recurso (mais compacto, "DRY"
+   na superfície) que na prática vaza a forma de persistência pro contrato
+   e depende de `readOnly` (fraco) em vez de `additionalProperties: false`
+   (forte) pra proteger campos de sistema.
+
+---
+
+## 3. Rodada 2 do spec-reviewer — minhas próprias correções da rodada 1 se contradiziam
+
+1. **Data / Fase** — 2026-07-04, fase de especificação (`spec/openapi.yaml`,
+   segunda revisão adversarial via agente `spec-reviewer`, 16 achados, sobre
+   o spec já corrigido pela entrada 2 acima).
+
+2. **O que a IA sugeriu** — Na rodada 1 eu tinha, na mesma leva de mudanças:
+   (a) declarado "same-state PATCH é sempre no-op 200" como decisão de
+   escopo genérica, e (b) criado a regra de negócio 6 dizendo "status de
+   tarefa não pode mudar se o projeto está arquivado" — sem checar se as
+   duas convivem. Também, na mesma rodada, "corrigi" a falta de exemplos de
+   400 (achado #7 da rodada 1) consolidando tudo num único componente
+   `BadRequest` reaproveitado por todo endpoint, com os mesmos 5 exemplos e
+   o mesmo `type` URI (`invalid-request-body`) pra casos de corpo, path e
+   query string.
+
+3. **Problema identificado** — Duas contradições que eu mesmo introduzi
+   tentando corrigir a rodada anterior, achadas pelo agente `spec-reviewer`
+   numa segunda passada (não por mim relendo):
+   - **Conflito no-op vs. regra 6**: reenviar `status` com o valor atual de
+     uma tarefa cujo projeto está arquivado — é no-op 200 (primeira
+     decisão) ou 422 de regra 6 (segunda decisão)? O spec da rodada 1 não
+     dizia qual das duas minhas próprias regras vencia. Eu criei a regra 6
+     pensando só no caso "tentar avançar status", sem testar o caso
+     "reenviar o mesmo status" contra ela.
+   - **BadRequest consolidado sobre-generalizou a correção anterior**: ao
+     resolver "faltam exemplos de 400" (achado #7 da rodada 1) do jeito
+     mais simples — um componente único reaproveitado em todo lugar —
+     criei um problema novo: todo endpoint passou a "documentar" exemplos
+     irrelevantes pra ele (ex.: `GET /projetos`, que não tem path id nem
+     body, documentava exemplo de `completedAt` num PATCH e de UUID
+     malformado num path que ela nem tem) e um único `type` URI
+     ("invalid-request-body") cobrindo path/query/body — o que é
+     tecnicamente errado (RFC 7807 usa `type` justamente pra diferenciar
+     categorias de problema; "invalid **request body**" descrevendo um
+     erro de path parameter é uma contradição textual).
+
+4. **Correção aplicada** — Precedência explícita: no-op vence a regra 6
+   ("reenviar o status atual não é uma mudança de status, logo não é
+   violação de regra de negócio, mesmo com projeto arquivado") — declarada
+   tanto na decisão de escopo quanto no texto da própria regra 6 e na
+   descrição do `PATCH /tarefas/{id}`, pra não depender de quem lê achar
+   uma e não a outra. Regra 6 também foi reformulada como *blacklist*
+   (status é o único campo travado; title/description/priority continuam
+   editáveis) em vez de *whitelist* implícita, que deixava a real do
+   `priority` ambígua. `BadRequest` foi desmembrado em três componentes —
+   `InvalidRequestBody` (schema body, `ValidationProblemDetails`),
+   `InvalidPathParameter` e `InvalidQueryParameter` (ambos `ProblemDetails`
+   simples) — cada um com `type` URI próprio, e cada endpoint religado só
+   aos exemplos que ele pode de fato produzir (endpoints com duas causas
+   possíveis, tipo `PATCH` com path+body, usam `oneOf` combinando os dois
+   schemas). Também formalizei precedência de validação (400 → 404 → 422,
+   a primeira falha vence e nunca chega na próxima etapa) e permiti
+   desarquivamento (`archived → active`) explicitamente, que antes existia
+   só implicitamente no enum sem nenhuma regra dizer se era permitido.
+
+5. **Lição** — Corrigir um achado isoladamente pode contradizer uma decisão
+   já tomada ou sobre-generalizar de um jeito que cria um achado novo (mais
+   sutil) no lugar do antigo; depois de aplicar uma leva de correções, vale
+   rodar a revisão adversarial de novo sobre o resultado, não assumir que
+   "resolvido" = "sem novos problemas" — foi exatamente essa segunda
+   passada que achou os dois conflitos acima, que eu não veria relendo meu
+   próprio spec.
 
 ---
 
@@ -511,6 +876,8 @@ incompleta, e por quê — não é um changelog de features.
    que "reler o spec de novo" não vai achar, porque não há nada de errado
    escrito, só uma decisão que nunca foi tomada.
 
+---
+
 ## 9. Auditoria do domain-guardian na camada de domínio Quarkus — pureza garantida só por convenção
 
 1. **Data / Fase** — 2026-07-06, fase de implementação Quarkus (camada de
@@ -562,6 +929,8 @@ incompleta, e por quê — não é um changelog de features.
    primeiro vazamento), a outra valia adiar (inútil antes da fase a que
    pertence). Aceitar recomendação de agente em bloco, sem arbitrar
    timing, teria sido tão ruim quanto ignorá-la.
+
+---
 
 ## 10. Testes de atomicidade do PATCH eram vácuos — passavam sem testar nada
 
@@ -627,6 +996,8 @@ incompleta, e por quê — não é um changelog de features.
    futura) teria pego isso mecanicamente: o mutante da cópia defensiva
    sobreviveria aos testes originais.
 
+---
+
 ## 11. Taxonomia RFC 7807 tinha um buraco: erros do Jackson escapavam do contrato
 
 1. **Data / Fase** — 2026-07-07, fase de implementação Quarkus (adapters;
@@ -681,103 +1052,7 @@ incompleta, e por quê — não é um changelog de features.
    ler o código dele, não a documentação; a IA fez isso sozinha, mas só
    depois que o auditor apontou o buraco.
 
-## 12. Coerção escalar do Jackson — drift de contrato invisível, pego pelo /sdd-check
-
-1. **Data / Fase** — 2026-07-07, fase de implementação Quarkus (adapters
-   já commitados e auditados; achado da primeira rodada do `/sdd-check`,
-   corrigido em `5d20b93`).
-
-2. **O que a IA sugeriu** — Os request DTOs tipavam todos os campos como
-   `String` (decisão deliberada e correta em si: permitia coletar todos
-   os erros de enum/validação de uma vez em `errors[]`, em vez do
-   fail-fast do Jackson). O que a IA não configurou foi a coerção
-   escalar default do Jackson por baixo disso: `{"name": 123}` era
-   silenciosamente coagido para `"123"` e aceito com `201`.
-
-3. **Problema identificado** — A spec declara `type: string`; um número
-   JSON não é uma string, e a requisição deveria falhar com `400`
-   `invalid-request-body`. O drift era duplamente invisível: (a) nenhum
-   teste enviava tipo errado em campo de texto — de novo o padrão das
-   entradas 9 e 11: a suíte testava o que foi escrito, não o espaço de
-   entradas que o contrato promete; (b) a auditoria de código do
-   `domain-guardian` (quarta passada) também não pegou, porque não há
-   linha errada pra apontar — o defeito era um *default de framework
-   não configurado*, exatamente a categoria "o que nunca foi escrito".
-   Quem pegou foi o `/sdd-check`, comparação sistemática spec×código —
-   a própria IA reportou o drift contra o próprio código, no modo
-   report-only pedido. Notável: campos de enum não eram afetados (o
-   valor coagido falhava na validação de domínio de valores), só os de
-   texto livre.
-
-4. **Correção aplicada** — `JacksonCoercionConfig` implements
-   `ObjectMapperCustomizer` (global pra camada REST, não por DTO):
-   coerção `Integer`/`Float`/`Boolean` → alvo textual configurada como
-   `CoercionAction.Fail`, escopada a `LogicalType.Textual` — DTOs não
-   têm campo numérico (direção inversa sem o que configurar) e a
-   serialização de resposta fica intacta. A falha vira
-   `MismatchedInputException`, que os mappers da entrada 11 já
-   convertem no `400 invalid-request-body` com o campo nomeado — nenhum
-   mapper novo, nenhum 500 cru. Dois testes de taxonomia novos:
-   `{"name": 123}` → 400/`name`; `{"priority": 1}` → 400/`priority`.
-   O código mudou, a spec ficou intocada — direção única do fluxo SDD.
-   Segunda rodada do `/sdd-check`: zero drift. Suíte 121/121.
-
-5. **Lição** — Default tolerante de framework é fonte de drift que nem
-   revisão de código nem a suíte que o autor escreveu enxergam — só
-   comparação sistemática contra o contrato (e, mecanicamente, a suíte
-   de contrato/Schemathesis do próximo passo); conformidade não é o que
-   o código faz, é o que o framework deixa passar por ele.
-
-## 13. Testes de taxonomia sobre-especificados — igualdade exata em prosa ilustrativa da spec
-
-1. **Data / Fase** — 2026-07-07, camada de validação de contrato do
-   `quarkus-impl` (matriz de cobertura do agente `contract-tester` +
-   validação de schema nas respostas; corrigido em `f4d8eb4`).
-
-2. **O que a IA sugeriu** — Nos testes de taxonomia escritos em fases
-   anteriores, a própria IA asseriu strings de `detail`/`message` com
-   igualdade exata, copiadas dos `components.examples` da spec:
-
-   ```java
-   .body("detail", equalTo("Nenhum projeto encontrado com id " + unknown))
-   .body("detail", equalTo("O identificador informado não é um UUID válido."))
-   .body("errors[0].message", equalTo("deve ser um UUID válido"))
-   ```
-
-3. **Problema identificado** — O agente `contract-tester`, ao montar a
-   matriz de cobertura, flagrou sobre-especificação nos meus próprios
-   testes de taxonomia: igualdade exata em strings de detail copiadas
-   dos examples da spec — examples em OpenAPI são ilustrativos, não
-   normativos (o schema só exige `detail` legível), e a exigência
-   forçaria o Rails a reproduzir as frases do Java caractere a
-   caractere, divergência que o contrato nunca prometeu. O ponto sutil:
-   o drift aqui é *para mais* — os testes exigiam mais do que a spec
-   promete, o espelho do padrão das entradas 9–12, onde a suíte exigia
-   *de menos*. Ambos são desvio do contrato; este passaria despercebido
-   até o dia 3, quando a suíte Rails ou reproduziria frases em
-   português do Java ou "falharia" sem violar contrato algum.
-
-4. **Correção aplicada** — Política de asserção explícita, decidida
-   pelo usuário sobre o achado e documentada no javadoc do
-   `ErrorTaxonomyTest` (vale também para a suíte Rails):
-   - **Normativo — igualdade exata**: `type` URI, status HTTP, membro
-     `status` do problem, shape do schema, `errors[].field`, resultados
-     de precedência.
-   - **Ilustrativo — token de carga (`containsString`)**: prosa de
-     `detail`/`message`, com tokens escolhidos para provar que a regra
-     certa disparou (ex.: `"retroceder"` para regra 5, `"estiver
-     arquivado"` para regra 6).
-   - **Exceção — exata**: texto que a política normativa de erros da
-     spec cita verbatim (os details de filtro de query).
-   Igualdades exatas ilustrativas abrandadas para tokens; asserções
-   normativas mantidas (e reforçadas: as seis regras 422 agora asserem
-   `type` + `status` + token do `detail`).
-
-5. **Lição** — Testes também driftam do contrato — para mais, não só
-   para menos: asserção mais forte que a promessa da spec vira contrato
-   fantasma que a segunda implementação herda sem nunca ter sido
-   pactuado; a fronteira normativo/ilustrativo precisa ser política
-   explícita da suíte, não hábito do gerador.
+---
 
 ## 14. Duas lacunas na spec congelada — descobertas pela suíte, promovidas a texto normativo
 
@@ -831,6 +1106,8 @@ incompleta, e por quê — não é um changelog de features.
    correção precisando de correção), nunca conhecimento tácito
    enterrado no teste de uma das stacks.
 
+---
+
 ## 15. Cinco mutantes sobreviventes do PIT — testes com asserção unilateral, fechando o apontamento do guardian
 
 1. **Data / Fase** — 2026-07-07, fase de testes de mutação do
@@ -880,6 +1157,8 @@ incompleta, e por quê — não é um changelog de features.
    mas asserem só um; mutação é o instrumento que torna essa assimetria
    visível e barata de corrigir — rodá-la é fechar o ciclo que o
    guardian só consegue apontar.
+
+---
 
 ## 16. Decisão de escopo — implementação Rails cortada; o plano dual-stack nunca foi questionado pela IA
 
@@ -939,202 +1218,3 @@ incompleta, e por quê — não é um changelog de features.
    TODOS os artefatos (inclusive o tooling em `.claude/` que dirige a
    própria IA), porque plano morto que sobrevive em agente/skill vira
    instrução ativa nas sessões seguintes.
-
-## 17. Lacuna prosa-vs-schema no `openapi.yaml` congelado — pega pelo Schemathesis, não por 6 rodadas de revisão humana
-
-1. **Data / Fase** — 2026-07-08, primeira execução real do pipeline de CI
-   (job `contract`, Schemathesis contra `spec/openapi.yaml`), já com a
-   spec formalmente "congelada" (ver item 10).
-
-2. **O que a IA sugeriu** — Nada de errado a corrigir na primeira
-   passada: a IA (eu) escreveu `spec/openapi.yaml` com
-   `ProjectIdParam`/`TaskIdParam` como `type: string, format: uuid` (sem
-   `pattern`) e `name`/`title` como `minLength: 1, maxLength: N` (sem
-   restrição de whitespace) — e a prosa ao lado (`info.description`,
-   exemplos `ProjectNameInvalid`/`TaskTitleInvalid`) já prometia
-   exatamente as regras mais estritas que o JSON Schema formal não
-   codificava: UUID canônico case-insensitive só no shape 8-4-4-4-12, e
-   "não pode estar em branco" além do comprimento. A implementação
-   (`UuidPathParamFilter`, `BodyValidation.invalidText`) já fazia a coisa
-   certa desde o início.
-
-3. **Problema identificado** — Schemathesis gera dados a partir do JSON
-   Schema formal, não da prosa. `format: uuid` não é validado por
-   nenhuma engine de schema (é só anotação); `minLength: 1` sozinho
-   aceita uma string de um único espaço. Rodando contra a API real, a
-   ferramenta gerou UUIDs de path em forma não-canônica e nomes/títulos
-   só-espaço, viu a API rejeitar corretamente (400), e reportou isso
-   como "schema constraints don't match API validation" em 6 operações —
-   um sinal de que o *schema* estava sub-declarado, não de que a API
-   estava errada. Seis rodadas de revisão adversarial humana/IA sobre a
-   spec (itens 1–9, 14) nunca pegaram essa lacuna especificamente porque
-   revisão de prosa lê "canônico" e "não pode estar em branco" e
-   preenche mentalmente a implicação de schema — a ferramenta de fuzzing
-   não faz essa inferência, só lê o que está formalmente declarado.
-
-4. **Correção aplicada** — `pattern` adicionado em 6 pontos, todos
-   *aditivos* (nenhum `minLength`/`maxLength` removido ou enfraquecido):
-   `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
-   em `ProjectIdParam`/`TaskIdParam` (case-insensitive — verifiquei antes
-   de aplicar que uma leitura lowercase-only contradiria a decisão já
-   fixada no item 3 deste documento e quebraria
-   `uppercaseHexUuidPassesPathValidation`; o humano confirmou
-   case-insensitive quando perguntado), e `.*\S.*` em
-   `CreateProjectRequest.name`, `UpdateProjectRequest.name`,
-   `CreateTaskRequest.title`, `UpdateTaskRequest.title`. Por ser emenda à
-   spec congelada, passou por `spec-reviewer` como confirmação dedicada
-   antes do commit (achou os dois regexes corretos, sem contradição nova
-   com prosa/exemplos existentes) e pela suíte de contrato completa
-   (162/162, sem quebra — validação client-side é desligada
-   deliberadamente nos testes Java, então o aperto do schema não afeta
-   os testes existentes, só ferramentas externas como o Schemathesis).
-   Ver `docs/decisoes.md` item 12 para o racional completo.
-
-5. **Lição** — Fuzzing baseado em schema mede a fidelidade do próprio
-   schema, não da implementação: ele expõe exatamente a categoria de
-   lacuna que revisão humana de prosa estrutura mal para achar (mesma
-   lição do item 1 sobre "o que nunca foi escrito") — porque a máquina
-   não preenche intenção a partir de texto, só valida o que está
-   formalmente declarado. Rodar a suíte de contrato contra a API viva,
-   cedo, teria achado isso antes da spec ser declarada congelada; rodá-la
-   depois ainda vale, mas transforma toda emenda subsequente em mudança
-   de artefato já "fechado" — daí o cuidado extra (spec-reviewer
-   dedicado) que esta emenda específica recebeu.
-
-## 18. Meio-fechamento do item 17 — o pattern de "não-branco" formalizou metade da regra e escondeu a outra metade
-
-1. **Data / Fase** — 2026-07-08, execução seguinte do pipeline de CI
-   após o fechamento do item 17 (patterns de UUID canônico e não-branco
-   já aplicados e "confirmados" pelo `spec-reviewer`).
-
-2. **O que a IA sugeriu** — No item 17, o pattern aplicado a
-   `name`/`title` foi `pattern: '.*\S.*'` — só a metade "não pode estar
-   em branco" da mensagem de exemplo (`ProjectNameInvalid`/
-   `TaskTitleInvalid`: "não pode estar em branco **e** deve ter no
-   máximo N caracteres"). A implementação (`BodyValidation.hasControlChar`,
-   chamada por `invalidText` desde uma correção anterior desta mesma
-   sessão) também rejeita qualquer caractere de controle — regra que já
-   existia, já testada, já documentada — mas essa segunda metade nunca
-   virou `pattern` no schema. O `spec-reviewer` disparado no item 17
-   revisou exatamente esse pattern e não achou o problema, porque a
-   pergunta feita a ele foi "esse regex está correto para 'não-branco'?"
-   — nunca "esse regex cobre TODA a regra que o código aplica?". O
-   escopo da pergunta limitou o que a revisão podia achar.
-
-3. **Problema identificado** — Schemathesis, rodando contra a API real,
-   gerou strings com caracteres de controle ASCII reais (0x07 BEL,
-   0x1C FS) misturados com texto comum (`"=A"`) — que satisfazem
-   `.*\S.*` (caractere de controle não é whitespace) mas que a API
-   corretamente rejeita. 4 falhas de "API rejected schema-compliant
-   request" — a mesma categoria do item 17, não uma nova: formalizar
-   *parte* de uma regra existente no schema deixa a parte não-formalizada
-   exatamente tão invisível para fuzzing quanto estava antes de qualquer
-   pattern existir. Meio-fechamento tem o mesmo efeito prático que
-   nenhum fechamento, para a parte que ficou de fora.
-
-4. **Correção aplicada** — Antes de aplicar, a IA testou o próprio
-   regex proposto (`^(?=.*\S)[^\x00-\x1F\x7F-\x9F]*$`) contra os 256
-   codepoints 0x00–0xFF em Python e achou um bug nele mesmo: o `$` do
-   Python (e do Java) casa tanto no fim absoluto da string quanto na
-   posição logo antes de um `\n` final isolado — `"A\n"` casava com o
-   pattern quando não devia (`\n` é caractere de controle). Trocado
-   `$` por `(?![\s\S])` (lookahead de "nenhum caractere segue"), que não
-   tem essa exceção em nenhum motor, e essa versão foi validada em
-   Python E em Node/V8 (o motor ECMA-262 que a OpenAPI declara) antes de
-   ser aplicada nos 4 pontos. Rodada local do Schemathesis com a mesma
-   seed do achado original confirmou os 4 casos resolvidos — mas expôs
-   um quinto, adjacente: `description` tem a mesma `hasControlChar` no
-   código e nenhum pattern no schema (não estava no escopo desta
-   rodada — `description` é opcional/nullable, então o pattern não pode
-   ser o mesmo `.*\S.*`-based; registrado em `docs/decisoes.md` item 12
-   como pendência, não aplicado ainda). O `spec-reviewer` rodado nesta
-   emenda, por sua vez, achou uma quarta camada: `(?=.*\S)` usa `.`, e
-   o `.` do Python exclui só `\n`, enquanto o `.` do ECMA-262 (o motor
-   nominal da spec) também exclui U+2028/U+2029 — que não são
-   caracteres de controle e deveriam ser aceitos, mas um validador JS
-   estrito os rejeitaria via esse pattern. A varredura de codepoints
-   feita pela IA (0x00–0x24F) nunca tocou U+2028/U+2029 — não cobria o
-   ponto exato da divergência. Achado reportado ao usuário, correção
-   (`(?=.*\S)` → `(?=[\s\S]*\S)`) ainda não aplicada, aguardando decisão.
-
-5. **Lição** — Cada rodada desta série (itens 14, 17, 18) fechou um
-   pouco e abriu o próximo: 6 rodadas de revisão de prosa não acharam a
-   lacuna schema-vs-prosa (item 17); a primeira correção do schema
-   formalizou só metade de uma regra e a fuzzing achou a outra metade
-   (este item); a correção da segunda metade tinha um bug de motor de
-   regex que só apareceu numa varredura de codepoints feita pela própria
-   IA antes de aplicar; e mesmo essa versão corrigida tinha uma
-   divergência de engine que só o `spec-reviewer` achou, numa faixa de
-   codepoints que a varredura da IA nunca tinha testado. Nenhuma camada
-   de verificação (revisão humana, teste de código, fuzzing de contrato,
-   verificação própria da IA, revisão adversarial de agente) pegou
-   tudo sozinha — cada uma pegou uma fatia diferente do mesmo problema
-   recorrente, e só a composição delas, rodada após rodada, foi reduzindo
-   a superfície do que sobrava. Dirigir IA em domínio de correção formal
-   (regex, schema) exige pedir verificação *específica e exaustiva*
-   ("varra todos os codepoints", "teste em dois motores") — pedir só
-   "isso está certo?" produz uma confirmação tão limitada quanto o
-   escopo da pergunta.
-
----
-
-## 19. Gate de segurança provou seu valor — CVE real no driver postgresql pego só depois do fix do Snyk (item ligado ao 17/18)
-
-1. **Data / Fase** — 2026-07-08, fase de CI/CD (pipeline de segurança:
-   Snyk + Trivy + gitleaks), depois da correção da flag do Maven CLI
-   (`--maven-skip-wrapper`) que destravou o step do Snyk.
-
-2. **O que a IA sugeriu** — Nas rodadas anteriores (`ci: fix pipeline`),
-   o foco foi só destravar o step do Snyk em si — a flag certa para o
-   CLI Maven embarcado na imagem `snyk/snyk:maven` validar a distribuição
-   sem quebrar em "Failed to validate Maven distribution SHA-256". Nenhuma
-   suposição foi feita sobre o que o scan ia encontrar depois de rodar —
-   o objetivo daquelas rodadas era só "o Snyk consegue rodar", não "o
-   Snyk aprova".
-
-3. **Problema identificado** — Assim que o Snyk finalmente escaneou de
-   verdade (177 dependências), achou 1 vulnerabilidade real de severidade
-   alta: `SNYK-JAVA-ORGPOSTGRESQL-17874248` ("Incorrect Implementation of
-   Authentication Algorithm") em `org.postgresql:postgresql@42.7.11`,
-   puxado transitivamente por `io.quarkus:quarkus-jdbc-postgresql@3.37.1`,
-   que por sua vez vem do `quarkus-bom@3.37.1` — o BOM oficial da
-   plataforma, considerado "confiável" por definição. Isso mostra que
-   confiar num BOM gerenciado não é garantia de dependências livres de
-   CVE: o BOM fixa versões por compatibilidade testada, não por ausência
-   de vulnerabilidade conhecida, e um driver JDBC de banco (superfície
-   de autenticação) é exatamente o tipo de dependência transitiva que
-   ninguém audita manualmente. Sem o gate de Snyk rodando de fato — e
-   sem as duas rodadas anteriores insistindo em destravar a flag certa
-   em vez de aceitar o step vermelho — essa CVE teria ido para produção
-   silenciosamente, mascarada pelo verde do resto do pipeline.
-
-4. **Correção aplicada** — Override de versão em `dependencyManagement`
-   no `quarkus-impl/pom.xml`, declarado *depois* do import do
-   `quarkus-bom` (ordem importa: a entrada mais específica declarada
-   por último no mesmo `dependencyManagement` vence a do BOM importado),
-   fixando `org.postgresql:postgresql` em `42.7.12` via propriedade
-   `postgresql.version`, versão onde o Snyk reporta a issue como
-   corrigida. Verificação em duas camadas antes de aceitar como pronto:
-   `mvn dependency:tree -Dincludes=org.postgresql:postgresql` confirmando
-   que a versão efetivamente resolvida no grafo é `42.7.12` (não bastava
-   só declarar — BOMs e overrides têm regras de precedência que podem
-   silenciosamente não pegar), e `./mvnw verify` completo (162 testes,
-   incluindo os testes de integração via Testcontainers que sobem
-   Postgres de verdade) confirmando que o bump de patch não quebrou
-   nada em runtime. O Snyk local não pôde ser reexecutado para confirmar
-   (401 — sessão não autenticada), então a confirmação final fica
-   pendente da próxima rodada de CI, registrada como tal em vez de
-   assumida como certa.
-
-5. **Lição** — Um gate de segurança só entrega valor quando ele
-   efetivamente roda e efetivamente falha quando deveria: as duas
-   rodadas anteriores gastas destravando a flag do Maven CLI não foram
-   trabalho de infraestrutura desperdiçado, foram a pré-condição para
-   este achado real. Dirigir IA em pipeline de segurança exige separar
-   "o step passou" de "o step rodou de verdade" — um step verde por
-   erro de configuração (ex: SHA-256 do Maven falhando antes de sequer
-   escanear) é pior que um step vermelho, porque cria falsa sensação de
-   cobertura. E mesmo depois do fix, aceitar a correção proposta pela
-   IA exige verificação de efeito real (dependency:tree, não só o
-   diff do pom.xml) — declarar uma versão em XML não garante que o
-   resolvedor de dependências do Maven vai de fato usá-la.

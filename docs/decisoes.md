@@ -626,6 +626,32 @@ achadas por fuzzing nesta série (UUID canônico, não-branco em
 `name`/`title`, caractere de controle em `name`/`title`/`description`)
 estão todas formalizadas no schema.
 
+**Addendum 3 — divergência de motor no lookahead de não-branco,
+achada pelo `spec-reviewer` no addendum 1, agora aplicada**: `(?=.*\S)`
+usa `.`, e `.` não tem a mesma exclusão de codepoint em todo motor —
+Python exclui só `\n`; ECMA-262 (o motor nominal que a spec declara para
+`pattern`) também exclui U+2028 (LINE SEPARATOR) e U+2029 (PARAGRAPH
+SEPARATOR). Nenhum dos dois é caractere de controle ASCII — deveriam
+continuar aceitos pela classe `[^\x00-\x1F\x7F-\x9F]*` que já os aceita —
+mas um validador JS estrito rejeitaria uma string como `" A"` no
+lookahead `(?=.*\S)` mesmo ela tendo um caractere não-whitespace de
+verdade, porque o `.*` do motor JS não atravessa U+2028/U+2029 sem a
+flag `s`. A varredura de codepoints do addendum 1 (0x00–0x24F) não
+cobria essa faixa (U+2028/U+2029 = 0x2028/0x2029). Corrigido nos 4
+pontos de `name`/`title` (`CreateProjectRequest.name`,
+`UpdateProjectRequest.name`, `CreateTaskRequest.title`,
+`UpdateTaskRequest.title`): `(?=.*\S)` → `(?=[\s\S]*\S)`, que usa a
+classe explícita `[\s\S]` (qualquer caractere, sem exceção de motor) em
+vez de `.`. `description` não precisou da mesma correção — seu pattern
+nunca teve o lookahead de não-branco (branco é válido lá), só a classe
+de exclusão de controle, que não usa `.`. Reverificado em Python e
+Node/V8 antes de aplicar: string vazia, só-espaço, `\n` final e texto
+normal continuam se comportando igual; `" A"` e `"A "` (antes
+rejeitados por engine estrito, teoricamente) agora aceitos nos dois
+motores. Suíte Java completa após a mudança: sem impacto (validação
+client-side desligada nos testes Java, mudança só afeta ferramentas
+schema-only como Schemathesis).
+
 ---
 
 ## 13. Limite do fuzzing baseado em schema — não modela invariante stateful de negócio
@@ -643,3 +669,147 @@ inteira, não só na operação onde o achado apareceu. Quem garante que cada
 `422` está correto — tipo certo, precedência certa, atômico — é a suíte
 determinística (`ErrorTaxonomyTest`), não o fuzzer; o fuzzer serve para
 achar lacuna de *schema*, não para validar regra de negócio.
+
+---
+
+## 14. Pipeline CI/CD — prova de aderência automatizada
+
+Esta seção responde diretamente à Etapa 3 do desafio: como o projeto prova,
+de forma automatizada e a cada push, que a implementação conforma à spec
+congelada — não por afirmação, por gate que falha se não conformar. O
+pipeline (`.github/workflows/ci.yml`) tem seis jobs. `test`, `spec-lint`,
+`security` e `contract` rodam em paralelo, sem depender um do outro; `sonar`
+depende de `test` (usa o relatório JaCoCo gerado lá); `release` é o gate
+final e só roda em push a `main` se **todos os cinco anteriores** passarem
+(`needs: [test, spec-lint, sonar, security, contract]`). O paralelismo é
+deliberado — os quatro primeiros jobs verificam propriedades independentes
+(a implementação, o próprio documento de spec, dependências/imagem, e a API
+viva contra o contrato) e não há razão para serializar o que não depende um
+do outro; a serialização real do pipeline é "nada libera release sem que
+tudo passe", não "cada etapa espera a anterior".
+
+### 1. `test` — `mvn verify`: unitário, integração, contrato
+
+Três camadas na mesma execução: unitário de domínio/aplicação (sem I/O),
+integração de adapters contra **PostgreSQL real via Testcontainers** (não
+H2 nem outro banco in-memory), e contrato (RestAssured + validação de
+schema contra `spec/openapi.yaml`, dentro do próprio `quarkus-impl`).
+
+**Por que Testcontainers e não in-memory**: um banco in-memory testa contra
+um SQL dialect diferente do que vai rodar em produção — constraints
+`CHECK`, comportamento de índice, tipo `UUID` nativo do Postgres, tudo isso
+diverge de H2 o suficiente para mascarar bug real ou, pior, acusar falso
+positivo em algo que só quebra na diferença de dialeto. Testcontainers sobe
+o mesmo `postgres:16` que a imagem de produção usa — o teste de integração
+prova conformidade contra o banco real, não contra uma aproximação dele.
+
+### 2. `spec-lint` — Redocly, valida o próprio contrato
+
+Lint estrutural de `spec/openapi.yaml` via `@redocly/cli`, config em
+`redocly.yaml` estendendo o ruleset `recommended`. Uma regra é
+explicitamente desligada: `security-defined`, porque a ausência de
+autenticação nesta API é decisão de escopo documentada
+(`info.description` do spec), não spec incompleta — desligar a regra é
+codificar essa decisão no gate, não silenciar um achado real. Todo o resto
+do ruleset recomendado permanece ativo.
+
+### 3. `sonar` — SonarQube Cloud, quality gate obrigatório
+
+`sonar:sonar` consumindo o relatório JaCoCo do job `test` (baixado como
+artifact, sem rebuild), com `-Dsonar.qualitygate.wait=true` — o job só
+passa se o Quality Gate do SonarCloud passar, não só se a análise rodar.
+Isso torna qualidade/cobertura um gate de CI, não um dashboard que alguém
+precisa lembrar de olhar.
+
+### 4. `security` — Snyk + Trivy + gitleaks
+
+Três ferramentas, três superfícies:
+- **Snyk** escaneia `quarkus-impl/pom.xml` (dependências Maven diretas e
+  transitivas), falha em `high`/`critical`.
+- **Trivy** escaneia a **imagem Docker já buildada** (`Dockerfile.jvm`),
+  não o manifesto — pega vulnerabilidade na camada base/OS que o Snyk (só
+  Maven) não vê.
+- **gitleaks** varre o histórico de commits por segredo vazado.
+
+**Prova de valor, não teatro**: a primeira vez que o job `security`
+efetivamente rodou (depois de destravar um problema de configuração do
+Maven CLI embarcado na imagem do Snyk), ele achou uma CVE real de
+severidade alta — `SNYK-JAVA-ORGPOSTGRESQL-17874248` ("Incorrect
+Implementation of Authentication Algorithm") em `org.postgresql:postgresql
+@42.7.11`, puxado transitivamente por `quarkus-jdbc-postgresql` a partir do
+`quarkus-bom` — o BOM oficial da plataforma, "confiável" por definição, mas
+que fixa versão por compatibilidade testada, não por ausência de CVE
+conhecida. Sem o gate rodando de fato, essa vulnerabilidade num driver de
+banco (superfície de autenticação) teria ido para produção mascarada pelo
+verde do resto do pipeline. Corrigido com override de versão em
+`dependencyManagement` (`postgresql.version=42.7.12`), verificado via
+`mvn dependency:tree` (não bastava declarar — precisa provar que o Maven
+resolveu a versão nova de fato). Racional completo e processo de
+diagnóstico em `ai/revisoes.md`.
+
+### 5. `contract` — Schemathesis, fuzzing baseado em propriedades
+
+Sobe a aplicação real contra um Postgres de serviço no runner e roda
+Schemathesis (`st run spec/openapi.yaml --url http://localhost:8080
+--checks all`) gerando requisições a partir do JSON Schema formal do
+contrato — a última linha de defesa, testando o espaço de entradas que o
+contrato *promete cobrir*, não os cenários que alguém lembrou de escrever
+manualmente. Achou bugs reais que nenhuma camada anterior (revisão humana,
+subagentes, suíte determinística) tinha pego: coerção escalar silenciosa do
+Jackson (`{"name": 123}` virando `"123"` aceito), caracteres de controle e
+byte nulo alcançando o Postgres cru como `500` em vez de `400`, e valor de
+enum vazio (`status=`) sendo tratado como ausente em vez de rejeitado.
+
+**Duas limitações encontradas, duas respostas diferentes**:
+- **Schema sub-declarado** (item 12 deste documento): quando o Schemathesis
+  aponta "API rejeitou requisição schema-compliant", a causa raiz repetida
+  foi a spec *dizer* a regra certa em prosa mas não *impor* a mesma regra em
+  JSON Schema formal (UUID sem `pattern`, `name`/`title` sem exclusão de
+  branco/controle). Resposta: apertar o schema para bater com a prosa —
+  fechar o gap é o próprio objetivo de SDD, contrato machine-readable
+  bastando sozinho.
+- **Invariante com estado** (item 13 deste documento): o fuzzer não modela
+  que um `422` de regra de negócio (ex.: criar tarefa num projeto que a
+  própria sequência stateful acabou de arquivar) é resultado correto e
+  documentado, não falha de schema. Resposta: configurar
+  `positive_data_acceptance.expected-statuses` para tratar `422` documentado
+  como aceito — mas quem prova que cada `422` está certo (tipo, precedência,
+  atomicidade) continua sendo a suíte determinística
+  (`ErrorTaxonomyTest`), nunca o fuzzer. As duas limitações não se
+  confundem: uma é lacuna do contrato (corrigível apertando a spec), a
+  outra é limite estrutural da técnica (fuzzing baseado em schema não
+  alcança invariante que depende de estado acumulado, só de forma).
+
+### 6. `release` — release-please
+
+Gate final, só em push a `main`, só se os cinco jobs anteriores passarem.
+`release-please-action@v4` deriva versionamento semântico e `CHANGELOG.md`
+a partir de conventional commits (`feat:`, `fix:`, `ci:` — disciplina do
+`CLAUDE.md`, verificável em todo o histórico deste repositório) e, quando
+cria uma release, anexa `spec/openapi.yaml` ao GitHub Release — o contrato
+congelado vira parte permanente e versionada de cada entrega, não um
+arquivo solto que pode divergir silenciosamente da versão que foi
+realmente lançada.
+
+### O que foi deliberadamente removido ou cortado
+
+- **`spec-drift` (oasdiff) removido.** O plano original incluía um job que
+  exportava o OpenAPI gerado em runtime pelo `quarkus-smallrye-openapi`
+  (via reflection sobre anotações JAX-RS) e o comparava, via `oasdiff`,
+  contra `spec/openapi.yaml`, falhando em diferença "breaking". Removido
+  antes de virar gate: nenhum resource deste projeto usa anotações
+  `@Operation`/`@APIResponse`/`@Schema` do MicroProfile OpenAPI — o
+  documento gerado é só um esqueleto inferido de path/método/parâmetro
+  JAX-RS, sem os schemas de erro RFC 7807, exemplos, ou descrições de
+  regra de negócio que fazem `spec/openapi.yaml` ser de fato o contrato.
+  Comparar os dois seria comparar um artefato pobre (derivado de anotações
+  que nunca foram escritas para isso) contra o contrato rico — toda
+  ausência de metadado no gerado apareceria como "drift", gerando ruído
+  constante que exigiria supressão manual crescente, o oposto de um gate
+  útil. Mais importante: esse job checaria a forma de dois documentos um
+  contra o outro; o job `contract` (Schemathesis) já prova a coisa que
+  realmente importa — que o **comportamento da API viva** conforma ao
+  contrato — o que é verificação mais forte que diff de texto entre dois
+  artefatos estáticos. `oasdiff` teria sido teatro de conformidade
+  (parece rigoroso, mas mede o artefato errado); removido em vez de
+  mantido com supressões acumulando.
